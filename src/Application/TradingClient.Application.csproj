@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="System.Reactive" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Domain\TradingClient.Domain.csproj" />
   </ItemGroup>
 
