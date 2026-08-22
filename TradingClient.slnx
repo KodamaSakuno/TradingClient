@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="src/Domain/TradingClient.Domain.csproj" />
+  <Project Path="src/Application/TradingClient.Application.csproj" />
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
+</Solution>
