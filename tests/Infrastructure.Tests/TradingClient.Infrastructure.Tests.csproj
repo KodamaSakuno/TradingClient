@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Common\TradingClient.Exchanges.Common.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Gate\TradingClient.Exchanges.Gate.csproj" />
   </ItemGroup>
 
 </Project>
