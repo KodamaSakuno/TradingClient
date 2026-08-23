@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Application\TradingClient.Application.csproj" />
+    <ProjectReference Include="..\Exchanges.Common\TradingClient.Exchanges.Common.csproj" />
   </ItemGroup>
 
 </Project>

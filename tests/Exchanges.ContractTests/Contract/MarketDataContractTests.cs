@@ -1,5 +1,4 @@
 using TradingClient.Application.Abstractions;
-using TradingClient.Domain.Instruments;
 
 namespace TradingClient.Exchanges.ContractTests.Contract;
 
@@ -8,21 +7,19 @@ public abstract class MarketDataContractTests
 {
     protected abstract IMarketData CreateConnector();
 
-    public static TheoryData<ProductKind> Products =>
-    [
-        ProductKind.Spot,
-        ProductKind.Futures
-    ];
-
-    [Theory]
-    [MemberData(nameof(Products))]
-    public async Task GetInstrumentsAsync_ReturnsInstrumentsOfRequestedProduct(ProductKind product)
+    [Fact]
+    public async Task GetInstrumentsAsync_ReturnsInstrumentsOfDeclaredProducts()
     {
         var connector = CreateConnector();
 
-        var instruments = await connector.GetInstrumentsAsync(product, TestContext.Current.CancellationToken);
+        Assert.NotEmpty(connector.Capabilities.Products);
 
-        Assert.NotEmpty(instruments);
-        Assert.All(instruments, i => Assert.Equal(product, i.Product));
+        foreach (var product in connector.Capabilities.Products)
+        {
+            var instruments = await connector.GetInstrumentsAsync(product, TestContext.Current.CancellationToken);
+
+            Assert.NotEmpty(instruments);
+            Assert.All(instruments, i => Assert.Equal(product, i.Product));
+        }
     }
 }

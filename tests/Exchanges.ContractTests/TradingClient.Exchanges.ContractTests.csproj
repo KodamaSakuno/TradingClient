@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\gate_spot_currency_pairs.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Application\TradingClient.Application.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Gate\TradingClient.Exchanges.Gate.csproj" />
   </ItemGroup>
 
 </Project>
