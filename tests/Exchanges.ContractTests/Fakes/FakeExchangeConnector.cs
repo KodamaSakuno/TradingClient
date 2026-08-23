@@ -69,12 +69,12 @@ public sealed class FakeExchangeConnector(AccountMode mode)
         {
             ProductKind.Spot =>
             [
-                new Instrument(new SpotSymbol("BTC", "USDT")),
-                new Instrument(new SpotSymbol("ETH", "USDT")),
+                new Instrument(new SpotSymbol("BTC", "USDT"), 0.01m, 0.0001m, 0.0001m, null, InstrumentStatus.Trading),
+                new Instrument(new SpotSymbol("ETH", "USDT"), 0.01m, 0.001m, 0.001m, null, InstrumentStatus.Trading),
             ],
             ProductKind.Futures =>
             [
-                new Instrument(new PerpetualFuturesSymbol("BTC", "USDT")),
+                new Instrument(new PerpetualFuturesSymbol("BTC", "USDT"), 0.1m, 0.001m, 0.001m, 0.0001m, InstrumentStatus.Trading),
             ],
             _ => [],
         };

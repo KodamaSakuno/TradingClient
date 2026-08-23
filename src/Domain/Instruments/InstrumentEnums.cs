@@ -18,3 +18,9 @@ public enum OptionRight
     Call,
     Put,
 }
+
+public enum InstrumentStatus
+{
+    Trading,
+    Suspended,
+}
