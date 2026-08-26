@@ -89,7 +89,6 @@ public class GateConnectorInstrumentsTests
     }
 
     [Theory]
-    [InlineData(ProductKind.Futures)]
     [InlineData(ProductKind.Options)]
     public async Task GetInstrumentsAsync_WithUnsupportedProduct_ThrowsNotSupported(ProductKind product)
     {
@@ -110,14 +109,14 @@ public class GateConnectorInstrumentsTests
     }
 
     [Fact]
-    public void Capabilities_Always_DeclareClassicSpotOnly()
+    public void Capabilities_Always_DeclareClassicSpotAndFutures()
     {
         var connector = CreateConnector(CurrencyPairsJson);
 
         Assert.Equal("Gate", connector.ExchangeId);
         Assert.Equal(AccountMode.Classic, connector.Capabilities.AccountMode);
         Assert.True(connector.Capabilities.RequiresInternalTransfers);
-        Assert.Equal([ProductKind.Spot], connector.Capabilities.Products);
+        Assert.Equal([ProductKind.Spot, ProductKind.Futures], connector.Capabilities.Products);
     }
 
     private static GateConnector CreateConnector(string json) =>

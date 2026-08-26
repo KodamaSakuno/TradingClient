@@ -60,7 +60,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     public override ExchangeCapabilities Capabilities { get; } = new(
         AccountMode.Classic,
         RequiresInternalTransfers: true,
-        Products: [ProductKind.Spot]);
+        Products: [ProductKind.Spot, ProductKind.Futures]);
 
     public override async Task ConnectAsync(CancellationToken ct)
     {
@@ -107,14 +107,31 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
 
     public async Task<IReadOnlyList<Instrument>> GetInstrumentsAsync(ProductKind product, CancellationToken ct)
     {
-        if (product != ProductKind.Spot)
-            throw new NotSupportedException($"Gate {product} instruments are not supported yet.");
+        return product switch
+        {
+            ProductKind.Spot => await GetSpotInstrumentsAsync(ct),
+            ProductKind.Futures => await GetFuturesInstrumentsAsync(ct),
+            _ => throw new NotSupportedException($"Gate {product} instruments are not supported yet."),
+        };
+    }
 
+    private async Task<IReadOnlyList<Instrument>> GetSpotInstrumentsAsync(CancellationToken ct)
+    {
         var pairs = await _httpClient.GetFromJsonAsync(
             $"{_baseUrl}/api/v4/spot/currency_pairs",
             GateJsonContext.Default.GateCurrencyPairArray, ct);
 
         return pairs?.Select(ToInstrument).ToArray() ?? [];
+    }
+
+    // 阶段 3 只接 usdt 结算（fixture 录自 testnet 2026-08-27）；btc/usd1 settle 未接
+    private async Task<IReadOnlyList<Instrument>> GetFuturesInstrumentsAsync(CancellationToken ct)
+    {
+        var contracts = await _httpClient.GetFromJsonAsync(
+            $"{_baseUrl}/api/v4/futures/usdt/contracts",
+            GateJsonContext.Default.GateFuturesContractArray, ct);
+
+        return contracts?.Select(ToFuturesInstrument).ToArray() ?? [];
     }
 
     public IObservable<Quote> SubscribeQuotes(Symbol symbol) => _wsClient.SubscribeQuotes(RequireSpot(symbol));
@@ -271,6 +288,26 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
                 : decimal.Parse(pair.MinQuoteAmount, CultureInfo.InvariantCulture),
             ContractMultiplier: null,
             Status: pair.TradeStatus == "tradable" ? InstrumentStatus.Trading : InstrumentStatus.Suspended);
+
+    // 数量语义（§7 铁律）：领域层统一币的数量，张数换算在此消化——
+    // MinQuantity = 最小张数 × quanto_multiplier，StepSize = 1 张 × quanto_multiplier
+    private static Instrument ToFuturesInstrument(GateFuturesContract contract)
+    {
+        var multiplier = decimal.Parse(contract.QuantoMultiplier, CultureInfo.InvariantCulture);
+
+        return new Instrument(
+            GateSymbolFormatter.ParseFutures(contract.Name),
+            TickSize: decimal.Parse(contract.OrderPriceRound, CultureInfo.InvariantCulture),
+            // enable_decimal=true 的小数张精度文档未给出，保守按 1 张步长（§7：宁保守勿激进）
+            StepSize: multiplier,
+            MinQuantity: contract.OrderSizeMin * multiplier,
+            MinQuoteAmount: null,
+            ContractMultiplier: multiplier,
+            // in_delisting=true 为下架过渡期/已下架，即便 status=trading 也归 Suspended
+            Status: contract.Status == "trading" && !contract.InDelisting
+                ? InstrumentStatus.Trading
+                : InstrumentStatus.Suspended);
+    }
 
     private static decimal Pow10Negative(int precision)
     {

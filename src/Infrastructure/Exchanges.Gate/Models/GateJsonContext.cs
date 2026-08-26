@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 namespace TradingClient.Exchanges.Gate.Models;
 
 [JsonSerializable(typeof(GateCurrencyPair[]))]
+[JsonSerializable(typeof(GateFuturesContract[]))]
 [JsonSerializable(typeof(GateSpotAccount[]))]
 [JsonSerializable(typeof(GateSpotOrderRequest))]
 [JsonSerializable(typeof(GateSpotOrder))]
