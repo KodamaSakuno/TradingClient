@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <PackageReference Include="ReactiveUI.Avalonia" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+  </ItemGroup>
+
+  <!-- 临时（§8.4）：UI 直接引用具体适配器仅为本步 Composition Root 组装方便；
+       将来应改走配置驱动（交易所启用列表走配置文件 + 连接器工厂），UI 只依赖 Application 抽象 -->
+  <ItemGroup>
+    <ProjectReference Include="..\Application\TradingClient.Application.csproj" />
+    <ProjectReference Include="..\Infrastructure\Exchanges.Gate\TradingClient.Exchanges.Gate.csproj" />
+  </ItemGroup>
+
+</Project>

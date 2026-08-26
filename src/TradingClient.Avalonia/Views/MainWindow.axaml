@@ -1,0 +1,76 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TradingClient.Avalonia.ViewModels"
+        xmlns:trading="using:TradingClient.Domain.Trading"
+        x:Class="TradingClient.Avalonia.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="TradingClient" Width="720" Height="520">
+
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
+
+    <!-- 交易所 + 产品选择器：条目由 ExchangeRegistry/Capabilities 驱动（§8.2） -->
+    <ComboBox Grid.Row="0"
+              ItemsSource="{Binding ConnectorOptions}"
+              SelectedItem="{Binding SelectedConnector}"
+              HorizontalAlignment="Left" MinWidth="200">
+      <ComboBox.ItemTemplate>
+        <DataTemplate DataType="vm:ConnectorOption">
+          <TextBlock Text="{Binding DisplayName}" />
+        </DataTemplate>
+      </ComboBox.ItemTemplate>
+    </ComboBox>
+
+    <!-- 交易对输入 -->
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+      <TextBlock Text="交易对" VerticalAlignment="Center" />
+      <TextBox Text="{Binding SymbolText, UpdateSourceTrigger=PropertyChanged}" Width="160" Watermark="BTC_USDT" />
+      <TextBlock Text="{Binding SymbolMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <!-- Ticker 区 -->
+    <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="16">
+        <TextBlock Grid.Column="0" Text="Best Bid" />
+        <TextBlock Grid.Column="1" Text="{Binding BestBid}" FontWeight="Bold" />
+        <TextBlock Grid.Column="2" Text="Best Ask" />
+        <TextBlock Grid.Column="3" Text="{Binding BestAsk}" FontWeight="Bold" />
+        <TextBlock Grid.Column="4" Text="时间" />
+        <TextBlock Grid.Column="5" Text="{Binding QuoteTimestamp}" />
+      </Grid>
+    </Border>
+
+    <!-- 连接状态 -->
+    <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
+      <TextBlock Text="连接状态" VerticalAlignment="Center" />
+      <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center" />
+    </StackPanel>
+
+    <!-- 余额区 -->
+    <Border Grid.Row="4" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+      <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
+        <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" />
+
+        <Grid Grid.Row="1" ColumnDefinitions="120,160,160">
+          <TextBlock Grid.Column="0" Text="Asset" FontWeight="Bold" />
+          <TextBlock Grid.Column="1" Text="Total" FontWeight="Bold" />
+          <TextBlock Grid.Column="2" Text="Frozen" FontWeight="Bold" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="2">
+          <ItemsControl ItemsSource="{Binding Balances}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="trading:AssetBalance">
+                <Grid ColumnDefinitions="120,160,160">
+                  <TextBlock Grid.Column="0" Text="{Binding Asset}" />
+                  <TextBlock Grid.Column="1" Text="{Binding Total}" />
+                  <TextBlock Grid.Column="2" Text="{Binding Frozen}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
+    </Border>
+
+  </Grid>
+</Window>
