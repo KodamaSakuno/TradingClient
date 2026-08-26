@@ -186,6 +186,31 @@ public class GateSpotWsClientTests
             credentials);
 
     [Fact]
+    public async Task SubscribeAck_WithError_NotifiesSubscriberOnError()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+        var collector = new Collector<SpotOrderUpdate>();
+
+        using var sub = client.SubscribeSpotOrderUpdates().Subscribe(collector);
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        transport.Push("""
+            {
+              "time": 1694655225,
+              "time_ms": 1694655225001,
+              "channel": "spot.orders",
+              "event": "subscribe",
+              "error": { "code": 4, "message": "Authentication fail" },
+              "result": null
+            }
+            """);
+
+        await WaitForAsync(() => collector.Errors.Count == 1, "ack error notification");
+        Assert.Contains("Authentication fail", collector.Errors[0].Message);
+    }
+
+    [Fact]
     public async Task SubscribeSpotOrderUpdates_WithCredentials_SendsAllPairsSubscribeFrameWithAuth()
     {
         var transport = new FakeWsTransport();
@@ -335,6 +360,7 @@ public class GateSpotWsClientTests
     private sealed class Collector<T> : IObserver<T>
     {
         public List<T> Items { get; } = [];
+        public List<Exception> Errors { get; } = [];
 
         public void OnNext(T value)
         {
@@ -342,7 +368,11 @@ public class GateSpotWsClientTests
                 Items.Add(value);
         }
 
-        public void OnError(Exception error) { }
+        public void OnError(Exception error)
+        {
+            lock (Errors)
+                Errors.Add(error);
+        }
 
         public void OnCompleted() { }
     }
