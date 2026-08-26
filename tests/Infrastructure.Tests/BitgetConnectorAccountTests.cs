@@ -136,6 +136,9 @@ public class BitgetConnectorAccountTests
         return new BitgetConnector(
             new HttpClient(new StubHttpMessageHandler(_ => OkJson("{}"))),
             BitgetConnector.DefaultBaseUrl,
+            // 账户测试不触发 WS 订阅，传输工厂不会被调用
+            new Uri("wss://localhost/ws"),
+            () => throw new InvalidOperationException("WS transport is not used in this test."),
             credentials: new BitgetCredentials("test-key", "test-secret", "test-passphrase"),
             demoTrading: false,
             authInnerHandler: handler);

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using TradingClient.Application.Abstractions;
 using TradingClient.Domain.Instruments;
@@ -6,6 +7,7 @@ using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
 using TradingClient.Exchanges.Bitget.Auth;
 using TradingClient.Exchanges.Bitget.Models;
+using TradingClient.Exchanges.Bitget.WebSocket;
 using TradingClient.Exchanges.Common;
 
 namespace TradingClient.Exchanges.Bitget;
@@ -13,9 +15,13 @@ namespace TradingClient.Exchanges.Bitget;
 public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccountService, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.bitget.com";
+    // 文档不一致：rest-api.md 的表写 /v2/ws/public，quick-start.md 与模拟盘 wspap 均为 /v3，以 quick-start 为准
+    public const string DefaultWsUrl = "wss://ws.bitget.com/v3/ws/public";
+    public const string DemoWsUrl = "wss://wspap.bitget.com/v3/ws/public";
 
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
+    private readonly BitgetSpotWsClient _wsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly BitgetCredentials? _credentials;
     private readonly bool _demoTrading;
@@ -24,16 +30,25 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
 
     private HttpClient? _authenticatedHttpClient;
 
-    public BitgetConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, BitgetCredentials? credentials = null, bool demoTrading = false)
-        : this(httpClient, baseUrl, credentials, demoTrading, authInnerHandler: null)
+    public BitgetConnector(
+        HttpClient httpClient,
+        string baseUrl = DefaultBaseUrl,
+        BitgetCredentials? credentials = null,
+        bool demoTrading = false,
+        string? wsUrl = null,
+        IWebProxy? wsProxy = null)
+        : this(httpClient, baseUrl, new Uri(wsUrl ?? (demoTrading ? DemoWsUrl : DefaultWsUrl)), () => new ClientWebSocketTransport(wsProxy), credentials, demoTrading, authInnerHandler: null)
     {
     }
 
     internal BitgetConnector(
         HttpClient httpClient,
         string baseUrl,
+        Uri wsEndpoint,
+        Func<IWsTransport> wsTransportFactory,
         BitgetCredentials? credentials,
         bool demoTrading,
+        TimeSpan? wsPingInterval = null,
         HttpMessageHandler? authInnerHandler = null)
     {
         _httpClient = httpClient;
@@ -41,6 +56,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
         _credentials = credentials;
         _demoTrading = demoTrading;
         _authInnerHandler = authInnerHandler;
+        _wsClient = new BitgetSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
     }
 
     public override string ExchangeId => "Bitget";
@@ -111,11 +127,11 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
         return response?.Data?.Select(ToInstrument).ToArray() ?? [];
     }
 
-    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => _wsClient.SubscribeQuotes(RequireSpot(symbol));
 
-    public IObservable<Trade> SubscribeTrades(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<Trade> SubscribeTrades(Symbol symbol) => _wsClient.SubscribeTrades(RequireSpot(symbol));
 
-    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => _wsClient.SubscribeOrderBook(RequireSpot(symbol));
 
     public IObservable<Candle> SubscribeCandles(Symbol symbol, TimeFrame tf) => throw new NotImplementedException();
 
@@ -162,11 +178,15 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     public Task<Result> TransferFundsAsync(TransferRequest req, CancellationToken ct) =>
         throw new NotImplementedException();
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _authenticatedHttpClient?.Dispose();
-        return ValueTask.CompletedTask;
+        await _wsClient.DisposeAsync();
     }
+
+    private static SpotSymbol RequireSpot(Symbol symbol) =>
+        symbol as SpotSymbol
+        ?? throw new NotSupportedException($"Bitget spot market data does not support symbol type {symbol.GetType().Name}.");
 
     private static decimal Parse(string value) => decimal.Parse(value, CultureInfo.InvariantCulture);
 
