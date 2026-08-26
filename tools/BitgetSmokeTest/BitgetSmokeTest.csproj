@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 冒烟工具：不加入 TradingClient.slnx（非产品代码），TargetFramework 继承根 Directory.Build.props -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TradingClient.Tools.BitgetSmokeTest</RootNamespace>
+    <AssemblyName>TradingClient.Tools.BitgetSmokeTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Bitget\TradingClient.Exchanges.Bitget.csproj" />
+  </ItemGroup>
+
+</Project>
