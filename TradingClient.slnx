@@ -3,6 +3,7 @@
   <Project Path="src/Application/TradingClient.Application.csproj" />
   <Project Path="src/Infrastructure/Exchanges.Common/TradingClient.Exchanges.Common.csproj" />
   <Project Path="src/Infrastructure/Exchanges.Gate/TradingClient.Exchanges.Gate.csproj" />
+  <Project Path="src/Infrastructure/Exchanges.Bitget/TradingClient.Exchanges.Bitget.csproj" />
   <Project Path="src/TradingClient.Avalonia/TradingClient.Avalonia.csproj" />
   <Project Path="tests/Domain.Tests/TradingClient.Domain.Tests.csproj" />
   <Project Path="tests/Application.Tests/TradingClient.Application.Tests.csproj" />
