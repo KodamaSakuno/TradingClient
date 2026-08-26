@@ -293,7 +293,24 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         }
 
         if (envelope.Event != GateWsProtocol.EventUpdate)
-            return; // subscribe/unsubscribe 的 ack 无需处理
+        {
+            // 订阅/退订 ack 成功无需处理；带 error 时（如 code 4 鉴权失败）路由给该频道全部订阅者，不得静默丢弃
+            if (envelope.Error is { } error)
+            {
+                List<SubscriptionEntry> affected;
+                lock (_gate)
+                    affected = _entries
+                        .Where(p => p.Key.Channel == envelope.Channel)
+                        .Select(p => p.Value)
+                        .ToList();
+
+                foreach (var affectedEntry in affected)
+                    affectedEntry.Updates.OnError(new InvalidOperationException(
+                        $"Gate WS subscription rejected on {envelope.Channel}: [{error.Code}] {error.Message}"));
+            }
+
+            return;
+        }
 
         // spot.orders 的 result 是订单数组且按 !all 订阅，无 symbol 维度，直接按频道路由
         var symbol = envelope.Channel == GateWsProtocol.ChannelOrders
