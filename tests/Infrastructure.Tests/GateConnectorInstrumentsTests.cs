@@ -17,6 +17,7 @@ public class GateConnectorInstrumentsTests
             "precision": 2,
             "amount_precision": 4,
             "min_base_amount": "0.0001",
+            "min_quote_amount": "1",
             "trade_status": "tradable"
           },
           {
@@ -35,6 +36,7 @@ public class GateConnectorInstrumentsTests
             "precision": 5,
             "amount_precision": 0,
             "min_base_amount": null,
+            "min_quote_amount": null,
             "trade_status": "untradable"
           }
         ]
@@ -53,6 +55,7 @@ public class GateConnectorInstrumentsTests
         Assert.Equal(0.01m, btc.TickSize);
         Assert.Equal(0.0001m, btc.StepSize);
         Assert.Equal(0.0001m, btc.MinQuantity);
+        Assert.Equal(1m, btc.MinQuoteAmount);
         Assert.Null(btc.ContractMultiplier);
         Assert.Equal(InstrumentStatus.Trading, btc.Status);
     }
@@ -81,6 +84,7 @@ public class GateConnectorInstrumentsTests
 
         var doge = Assert.Single(instruments, i => i.Symbol.Equals(new SpotSymbol("DOGE", "USDT")));
         Assert.Equal(0m, doge.MinQuantity);
+        Assert.Null(doge.MinQuoteAmount);
         Assert.Equal(1m, doge.StepSize);
     }
 

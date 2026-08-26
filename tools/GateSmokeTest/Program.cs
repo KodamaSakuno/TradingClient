@@ -159,8 +159,10 @@ if (instrument is not null && lastPrice is { } marketPrice)
 {
     // fill 模式挂在市价上方穿越价差立即成交；默认模式半价远离市价
     var price = instrument.AlignPrice(marketPrice * (fillMode ? 1.05m : 0.5m));
-    // Instrument 暂未携带 min_quote_amount（领域缺口，待补），按目标名义金额反推数量
-    const decimal targetNotional = 5m;
+    // 按目标名义金额反推数量：覆盖交易所 min_quote_amount 并留 20% 余量
+    var targetNotional = instrument.MinQuoteAmount is { } minQuote
+        ? decimal.Max(5m, minQuote * 1.2m)
+        : 5m;
     var minQty = instrument.MinQuantity > 0 ? instrument.MinQuantity : instrument.StepSize;
     var notionalQty = instrument.AlignQuantity(targetNotional / price);
     var quantity = notionalQty > minQty ? notionalQty : minQty;

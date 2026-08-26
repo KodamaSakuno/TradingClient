@@ -10,4 +10,6 @@ internal sealed record GateCurrencyPair(
     int Precision,
     int AmountPrecision,
     string? MinBaseAmount,
+    // Gate 文档原文 "null means no limit"
+    string? MinQuoteAmount,
     string TradeStatus);

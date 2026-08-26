@@ -266,6 +266,9 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             MinQuantity: pair.MinBaseAmount is null
                 ? 0m
                 : decimal.Parse(pair.MinBaseAmount, CultureInfo.InvariantCulture),
+            MinQuoteAmount: pair.MinQuoteAmount is null
+                ? null
+                : decimal.Parse(pair.MinQuoteAmount, CultureInfo.InvariantCulture),
             ContractMultiplier: null,
             Status: pair.TradeStatus == "tradable" ? InstrumentStatus.Trading : InstrumentStatus.Suspended);
 

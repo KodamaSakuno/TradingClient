@@ -10,7 +10,7 @@ public class InstrumentCacheTests
     private static readonly PerpetualFuturesSymbol BtcPerp = new("BTC", "USDT");
 
     private static Instrument SpotInstrument(Symbol? symbol = null, InstrumentStatus status = InstrumentStatus.Trading) =>
-        new(symbol ?? BtcUsdt, 0.01m, 0.001m, 0.001m, null, status);
+        new(symbol ?? BtcUsdt, 0.01m, 0.001m, 0.001m, null, null, status);
 
     [Fact]
     public async Task GetAsync_KnownSymbol_ReturnsInstrument()

@@ -13,7 +13,7 @@ public class PlaceSpotOrderTests
     private static readonly SpotSymbol BtcUsdt = new("BTC", "USDT");
 
     private static Instrument Instrument(InstrumentStatus status = InstrumentStatus.Trading) =>
-        new(BtcUsdt, TickSize: 0.01m, StepSize: 0.001m, MinQuantity: 0.001m, null, status);
+        new(BtcUsdt, TickSize: 0.01m, StepSize: 0.001m, MinQuantity: 0.001m, null, null, status);
 
     private static (PlaceSpotOrder UseCase, FakeSpotTrading Trading) CreateUseCase(
         InstrumentStatus status = InstrumentStatus.Trading)

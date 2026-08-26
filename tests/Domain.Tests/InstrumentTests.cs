@@ -9,6 +9,7 @@ public class InstrumentTests
         TickSize: 0.01m,
         StepSize: 0.0001m,
         MinQuantity: 0.0001m,
+        MinQuoteAmount: null,
         ContractMultiplier: null,
         Status: InstrumentStatus.Trading);
 
@@ -24,7 +25,7 @@ public class InstrumentTests
     [MemberData(nameof(SymbolsWithProduct))]
     public void Product_IsDerivedFromSymbolSubtype(Symbol symbol, ProductKind expected)
     {
-        var instrument = new Instrument(symbol, 0.01m, 0.0001m, 0.0001m, null, InstrumentStatus.Trading);
+        var instrument = new Instrument(symbol, 0.01m, 0.0001m, 0.0001m, null, null, InstrumentStatus.Trading);
 
         Assert.Equal(expected, instrument.Product);
     }
@@ -93,5 +94,44 @@ public class InstrumentTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal("INSTRUMENT_NOT_TRADING", result.Error?.Code);
+    }
+
+    [Fact]
+    public void ValidateOrder_WithNotionalBelowMinimum_ReturnsError()
+    {
+        var instrument = BtcUsdtSpot() with { MinQuoteAmount = 10m };
+
+        var result = instrument.ValidateOrder(50_000m, 0.0001m);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("NOTIONAL_TOO_SMALL", result.Error?.Code);
+    }
+
+    [Fact]
+    public void ValidateOrder_WithNotionalAboveMinimum_Succeeds()
+    {
+        var instrument = BtcUsdtSpot() with { MinQuoteAmount = 10m };
+
+        var result = instrument.ValidateOrder(50_000m, 0.01m);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public void ValidateOrder_WithNullMinQuoteAmount_SkipsNotionalCheck()
+    {
+        var result = BtcUsdtSpot().ValidateOrder(50_000m, 0.0001m);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public void ValidateOrder_WithMarketOrder_SkipsNotionalCheck()
+    {
+        var instrument = BtcUsdtSpot() with { MinQuoteAmount = 10m };
+
+        var result = instrument.ValidateOrder(price: null, 0.0001m);
+
+        Assert.True(result.IsSuccess);
     }
 }
