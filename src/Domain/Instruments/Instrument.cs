@@ -7,6 +7,7 @@ public sealed record Instrument(
     decimal TickSize,
     decimal StepSize,
     decimal MinQuantity,
+    decimal? MinQuoteAmount,
     decimal? ContractMultiplier,
     InstrumentStatus Status)
 {
@@ -30,6 +31,10 @@ public sealed record Instrument(
         if (quantity % StepSize != 0)
             return Result.Failure(new ExchangeError(
                 "INVALID_QUANTITY", $"Quantity must be a multiple of step size {StepSize}."));
+        // 市价单无价格无法计算名义金额，跳过；Gate 等交易所对限价单强制 min_quote_amount
+        if (MinQuoteAmount is not null && price is not null && price.Value * quantity < MinQuoteAmount)
+            return Result.Failure(new ExchangeError(
+                "NOTIONAL_TOO_SMALL", $"Notional value must be at least {MinQuoteAmount}."));
         return Result.Success();
     }
 }
