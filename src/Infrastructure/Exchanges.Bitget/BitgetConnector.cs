@@ -33,6 +33,8 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     private readonly TokenBucketRateLimiter _spotRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（BitgetAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
+    // 部分网络环境访问 api.bitget.com 需代理（REST 签名链路）
+    private readonly IWebProxy? _httpProxy;
 
     private HttpClient? _authenticatedHttpClient;
 
@@ -43,7 +45,8 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
         bool demoTrading = false,
         string? wsUrl = null,
         IWebProxy? wsProxy = null,
-        string? privateWsUrl = null)
+        string? privateWsUrl = null,
+        IWebProxy? httpProxy = null)
         : this(httpClient, baseUrl,
             new Uri(wsUrl ?? (demoTrading ? DemoWsUrl : DefaultWsUrl)),
             () => new ClientWebSocketTransport(wsProxy),
@@ -51,6 +54,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
             privateWsEndpoint: new Uri(privateWsUrl ?? (demoTrading ? DemoPrivateWsUrl : DefaultPrivateWsUrl)),
             authInnerHandler: null)
     {
+        _httpProxy = httpProxy;
     }
 
     internal BitgetConnector(
@@ -123,7 +127,8 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
 
         var handler = new BitgetAuthHandler(_credentials, _timeSync, _demoTrading);
         // 生产路径无桩注入时必须显式指定真实内层 handler，否则 DelegatingHandler 在发送时抛 InvalidOperationException
-        handler.InnerHandler = _authInnerHandler ?? new HttpClientHandler();
+        handler.InnerHandler = _authInnerHandler
+            ?? (_httpProxy is not null ? new HttpClientHandler { Proxy = _httpProxy } : new HttpClientHandler());
 
         return new HttpClient(handler)
         {
