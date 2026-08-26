@@ -9,6 +9,8 @@ using TradingClient.Application.Services;
 using TradingClient.Application.UseCases.Spot;
 using TradingClient.Avalonia.ViewModels;
 using TradingClient.Avalonia.Views;
+using TradingClient.Exchanges.Bitget;
+using TradingClient.Exchanges.Bitget.Auth;
 using TradingClient.Exchanges.Gate;
 using TradingClient.Exchanges.Gate.Auth;
 
@@ -17,7 +19,7 @@ namespace TradingClient.Avalonia;
 // 基类全限定：本程序集内 using TradingClient.Application.* 会让 Application 解析到命名空间
 public sealed class App : global::Avalonia.Application
 {
-    // Gate testnet 端点（当前唯一连接器；将来改走配置文件 §9）
+    // Gate testnet 端点（将来改走配置文件 §9）
     private const string TestnetBaseUrl = "https://api-testnet.gateapi.io";
     private const string TestnetWsUrl = "wss://ws-testnet.gate.com/v4/ws/spot";
 
@@ -32,10 +34,7 @@ public sealed class App : global::Avalonia.Application
             var viewModel = services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
 
-            // 连接与首屏数据拉取是后台初始化，失败已在内部记录并降级，不阻塞启动
-            _ = viewModel.InitializeAsync();
-
-            // ServiceProvider 内含 IAsyncDisposable 连接器（GateConnector），退出时必须异步释放
+            // ServiceProvider 内含 IAsyncDisposable 连接器（GateConnector/BitgetConnector），退出时必须异步释放
             desktop.Exit += (_, _) => services.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
 
@@ -78,7 +77,40 @@ public sealed class App : global::Avalonia.Application
                 wsProxy: wsProxy);
         });
 
+        // Bitget 凭证三字段缺一即降级为 null，与 Gate 同款
+        var bitgetApiKey = Environment.GetEnvironmentVariable("BITGET_TESTNET_API_KEY");
+        var bitgetApiSecret = Environment.GetEnvironmentVariable("BITGET_TESTNET_API_SECRET");
+        var bitgetPassphrase = Environment.GetEnvironmentVariable("BITGET_TESTNET_PASSPHRASE");
+        var bitgetCredentials = !string.IsNullOrWhiteSpace(bitgetApiKey)
+            && !string.IsNullOrWhiteSpace(bitgetApiSecret)
+            && !string.IsNullOrWhiteSpace(bitgetPassphrase)
+            ? new BitgetCredentials(bitgetApiKey, bitgetApiSecret, bitgetPassphrase)
+            : null;
+        Log.Logger.Information(
+            bitgetCredentials is null
+                ? "Bitget demo credentials not configured; authenticated endpoints will report MISSING_CREDENTIALS"
+                : "Bitget demo credentials loaded (ApiKey={MaskedApiKey})",
+            bitgetApiKey is null ? null : bitgetApiKey[..Math.Min(4, bitgetApiKey.Length)] + "****");
+
+        services.AddSingleton(sp =>
+        {
+            var proxyArg = Environment.GetEnvironmentVariable("BITGET_TESTNET_PROXY")
+                ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
+            var proxy = string.IsNullOrWhiteSpace(proxyArg) ? null : new WebProxy(proxyArg);
+
+            // 模拟盘与生产共用 REST 主机（用默认 baseUrl），差异在 paptrading 请求头与 wspap WS 端点，
+            // 由 demoTrading 切换（BitgetConnector 内部按 demoTrading 选 wspap 公共/私有端点）
+            return new BitgetConnector(
+                sp.GetRequiredService<HttpClient>(),
+                credentials: bitgetCredentials,
+                demoTrading: true,
+                wsProxy: proxy,
+                httpProxy: proxy);
+        });
+
         // 同一连接器实例按能力面向不同抽象注册（§5.1）
+        // 注意：MS DI 单服务解析取最后注册项——共享抽象（IMarketData 等）仍指向 Gate，
+        // 供 PlaceSpotOrder 等现有用例使用；多连接器的按选择器分派等下单 UI 接入时再设计
         services.AddSingleton<IExchangeConnector>(sp => sp.GetRequiredService<GateConnector>());
         services.AddSingleton<IMarketData>(sp => sp.GetRequiredService<GateConnector>());
         services.AddSingleton<IAccountService>(sp => sp.GetRequiredService<GateConnector>());
@@ -88,6 +120,7 @@ public sealed class App : global::Avalonia.Application
         {
             var registry = new ExchangeRegistry();
             registry.Register(sp.GetRequiredService<GateConnector>());
+            registry.Register(sp.GetRequiredService<BitgetConnector>());
             return registry;
         });
 

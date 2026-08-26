@@ -35,6 +35,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 
         WireConnectionStates();
         WireQuoteStream();
+        WireConnectorActivation();
     }
 
     public IReadOnlyList<ConnectorOption> ConnectorOptions { get; }
@@ -104,15 +105,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         private set => this.RaiseAndSetIfChanged(ref _accountSummary, value);
     }
 
-    /// <summary>连接 + 首屏余额拉取。由 Composition Root 在窗口创建后调用一次。</summary>
-    public async Task InitializeAsync()
+    // 选中项变化（含订阅时的初始值）即激活该连接器：连接 + 清空旧余额 + 拉新余额
+    private void WireConnectorActivation()
     {
-        var connector = SelectedConnector?.Connector;
-        if (connector is null)
-            return;
+        this.WhenAnyValue(vm => vm.SelectedConnector)
+            .Where(option => option is not null)
+            .DistinctUntilChanged()
+            .Subscribe(
+                option => _ = ActivateConnectorAsync(option!.Connector),
+                ex => _logger.Error(ex, "Connector activation stream faulted"))
+            .DisposeWith(_subscriptions);
+    }
 
+    private async Task ActivateConnectorAsync(IExchangeConnector connector)
+    {
         try
         {
+            // ConnectAsync 重复调用是幂等的校时 + 状态推进，对切换回来的连接器无害
             await connector.ConnectAsync(CancellationToken.None);
         }
         catch (Exception ex)
@@ -121,18 +130,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             _logger.Error(ex, "Failed to connect exchange {ExchangeId}", connector.ExchangeId);
         }
 
+        // 切换交易所先清空旧账户展示，避免新旧余额混排
+        Balances.Clear();
         if (connector is IAccountService account)
-            await LoadAccountAsync(account);
+            await LoadAccountAsync(connector.ExchangeId, account);
     }
 
-    private async Task LoadAccountAsync(IAccountService account)
+    private async Task LoadAccountAsync(string exchangeId, IAccountService account)
     {
         var result = await account.GetAccountAsync(CancellationToken.None);
         if (!result.IsSuccess)
         {
             var error = result.Error!;
+            // 环境变量名是组装细节（Composition Root 的职责），VM 只按交易所给通用提示
             AccountSummary = error.Code == "MISSING_CREDENTIALS"
-                ? "未配置凭证（设置 GATE_TESTNET_API_KEY / GATE_TESTNET_API_SECRET 后重启）"
+                ? $"未配置 {exchangeId} 凭证（设置环境变量后重启）"
                 : $"余额加载失败：[{error.Code}] {error.Message}";
             _logger.Warning("Account load failed: [{ErrorCode}] {ErrorMessage}", error.Code, error.Message);
             return;
