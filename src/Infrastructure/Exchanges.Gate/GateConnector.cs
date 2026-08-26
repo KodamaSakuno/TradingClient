@@ -93,8 +93,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             throw new InvalidOperationException("Gate authenticated endpoints require credentials.");
 
         var handler = new GateAuthHandler(_credentials, _timeSync);
-        if (_authInnerHandler is not null)
-            handler.InnerHandler = _authInnerHandler;
+        // 生产路径无桩注入时必须显式指定真实内层 handler，否则 DelegatingHandler 在发送时抛 InvalidOperationException
+        handler.InnerHandler = _authInnerHandler ?? new HttpClientHandler();
 
         return new HttpClient(handler)
         {
