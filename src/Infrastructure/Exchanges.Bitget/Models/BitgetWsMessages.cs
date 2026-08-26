@@ -25,12 +25,29 @@ internal sealed record BitgetWsLoginArg(string ApiKey, string Passphrase, string
 /// </summary>
 internal sealed record BitgetWsEnvelope(
     string? Event,
-    string? Code,
+    // 文档示例 code 是字符串（"0"），实测服务端发数字（30011）：字符串属性反序列化直接 JsonException
+    [property: JsonConverter(typeof(BitgetStringOrNumberConverter))] string? Code,
     string? Msg,
     BitgetWsChannelArg? Arg,
     string? Action,
     JsonElement Data,
     long? Ts);
+
+/// <summary>字符串/数字两种 JSON 形态都读成字符串（见 BitgetWsEnvelope.Code 注释）</summary>
+internal sealed class BitgetStringOrNumberConverter : JsonConverter<string?>
+{
+    public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString(),
+            JsonTokenType.Number => JsonDocument.ParseValue(ref reader).RootElement.GetRawText(),
+            JsonTokenType.Null => null,
+            _ => throw new JsonException($"Unexpected token {reader.TokenType} for string-or-number field."),
+        };
+
+    public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value);
+}
 
 /// <summary>ticker 频道 data 项（数值全字符串）</summary>
 internal sealed record BitgetWsTicker(

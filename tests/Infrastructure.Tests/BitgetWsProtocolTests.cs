@@ -168,6 +168,35 @@ public class BitgetWsProtocolTests
     }
 
     [Fact]
+    public void ParseEnvelope_WithNumericCode_ParsesAsString()
+    {
+        // 实测帧（2026-08-26 模拟盘）：服务端发的 code 是数字而非文档示例的字符串
+        const string json = """
+            {"event":"error","code":30011,"msg":"Invalid ACCESS_KEY","connId":"06f32efffea6dcaf"}
+            """;
+
+        var envelope = BitgetWsProtocol.ParseEnvelope(json);
+
+        Assert.NotNull(envelope);
+        Assert.True(BitgetWsProtocol.IsErrorAck(envelope));
+        Assert.Equal("30011", envelope.Code);
+    }
+
+    [Fact]
+    public void IsLoginSuccess_WithNumericZeroCode_ReturnsTrue()
+    {
+        // 文档示例 login 成功为 "code":"0"，按实测数字形态防御
+        const string json = """
+            {"event":"login","code":0,"msg":""}
+            """;
+
+        var envelope = BitgetWsProtocol.ParseEnvelope(json);
+
+        Assert.NotNull(envelope);
+        Assert.True(BitgetWsProtocol.IsLoginSuccess(envelope));
+    }
+
+    [Fact]
     public void IsPong_WithLiteralPongTextFrame_ReturnsTrue()
     {
         Assert.True(BitgetWsProtocol.IsPong("pong"));
