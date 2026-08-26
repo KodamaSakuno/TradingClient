@@ -4,13 +4,15 @@ using System.Reactive.Subjects;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
+using TradingClient.Exchanges.Bitget.Auth;
 using TradingClient.Exchanges.Bitget.Models;
 using TradingClient.Exchanges.Common;
 
 namespace TradingClient.Exchanges.Bitget.WebSocket;
 
 /// <summary>
-/// Bitget UTA 现货公共行情 WS（私有频道 login/订单推送留待下一步）
+/// Bitget UTA WS 客户端：无凭证时为公共行情端点；带凭证时连接私有端点，
+/// 连接后先 login、等 login 成功 ack 再补订阅（私有/公共是两个独立端点，各持一个实例）
 /// </summary>
 internal sealed class BitgetSpotWsClient : IAsyncDisposable
 {
@@ -22,6 +24,8 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
     private readonly Action<ConnectionState> _reportState;
     private readonly Func<Func<CancellationToken, Task>, CancellationToken, Task> _reconnect;
     private readonly TimeSpan _pingInterval;
+    private readonly BitgetCredentials? _credentials;
+    private readonly ServerTimeSync? _timeSync;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<SubscriptionKey, SubscriptionEntry> _entries = new();
@@ -32,6 +36,8 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
     private IWsTransport? _transport;
     private CancellationTokenSource? _pingCts;
     private bool _connectedOnce;
+    // 私有端点 login 成功前不得发订阅（服务端会拒），由 login ack 翻开
+    private bool _loginReady;
     private bool _disposed;
 
     // TODO: 单连接限 10 msg/s、建议订阅 ≤50 频道；超限时需连接分片，本步不实现（订阅量级远未触及）
@@ -40,13 +46,17 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
         Func<IWsTransport> transportFactory,
         Action<ConnectionState> reportState,
         Func<Func<CancellationToken, Task>, CancellationToken, Task> reconnect,
-        TimeSpan? pingInterval = null)
+        TimeSpan? pingInterval = null,
+        BitgetCredentials? credentials = null,
+        ServerTimeSync? timeSync = null)
     {
         _endpoint = endpoint;
         _transportFactory = transportFactory;
         _reportState = reportState;
         _reconnect = reconnect;
         _pingInterval = pingInterval ?? s_defaultPingInterval;
+        _credentials = credentials;
+        _timeSync = timeSync;
     }
 
     public IObservable<Quote> SubscribeQuotes(SpotSymbol symbol) =>
@@ -59,6 +69,21 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
 
     public IObservable<OrderBookDelta> SubscribeOrderBook(SpotSymbol symbol) =>
         Subscribe(BitgetWsProtocol.TopicBooks, BitgetSymbolFormatter.FormatSpot(symbol), BitgetWsProtocol.ToOrderBookDelta);
+
+    public IObservable<SpotOrderUpdate> SubscribeSpotOrderUpdates()
+    {
+        // 私有频道无凭证必然 login 失败：订阅时直接给错误，比连上后静默失败更明确（Gate 同款处理）
+        if (_credentials is null)
+            return Observable.Create<SpotOrderUpdate>(observer =>
+            {
+                observer.OnError(new InvalidOperationException("Bitget private channels require credentials."));
+                return Disposable.Empty;
+            });
+
+        // order 频道是账户级订阅（无 symbol），路由键用空串占位；一条推送的 data 可含多个订单，映射为数组后展开
+        return Subscribe(BitgetWsProtocol.TopicOrder, string.Empty, BitgetWsProtocol.ToSpotOrderUpdates)
+            .SelectMany(updates => updates);
+    }
 
     private IObservable<T> Subscribe<T>(
         string topic, string formattedSymbol, Func<BitgetWsEnvelope, T?> map) where T : class
@@ -136,7 +161,7 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
         if (lastForKey)
         {
             entry.Updates.OnCompleted();
-            SendIfConnected(BitgetWsProtocol.BuildUnsubscribeFrame(key.Topic, key.Symbol));
+            SendIfConnected(BuildFrame(BitgetWsProtocol.OpUnsubscribe, key));
         }
     }
 
@@ -208,14 +233,34 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
         lock (_gate)
             _transport = transport;
 
+        if (_credentials is not null)
+        {
+            // 私有端点：连接后先 login；订阅、Connected 状态与 ping 循环都在 login 成功 ack（Dispatch）后启动，
+            // 保证 login 先于 subscribe（未登录的订阅会被服务端拒绝）
+            var timestamp = (_timeSync?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+            await SendSafeAsync(transport, BitgetWsProtocol.BuildLoginFrame(_credentials, timestamp));
+            return;
+        }
+
         // 连接（重连）后重发全部活跃订阅
+        foreach (var frame in CollectSubscribeFrames())
+            await SendSafeAsync(transport, frame);
+
+        _reportState(ConnectionState.Connected);
+        StartPingLoop(transport);
+    }
+
+    // 把活跃订阅标记为已订阅并收集待发送帧；
+    // 与 SendSubscribeIfConnected 约定：谁先把 Subscribed 翻成 true 谁负责发送，防止两条路径重复发 subscribe
+    private List<string> CollectSubscribeFrames()
+    {
         List<(SubscriptionKey Key, SubscriptionEntry Entry)> active;
         lock (_gate)
             active = _entries.Where(p => p.Value.RefCount > 0).Select(p => (p.Key, p.Value)).ToList();
 
+        var frames = new List<string>(active.Count);
         foreach (var (key, entry) in active)
         {
-            // 与 SendSubscribeIfConnected 约定：谁先把 Subscribed 翻成 true 谁负责发送，防止两条路径重复发 subscribe
             lock (_gate)
             {
                 if (entry.Subscribed)
@@ -224,8 +269,27 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
                 entry.Subscribed = true;
             }
 
-            await SendSafeAsync(transport, BitgetWsProtocol.BuildSubscribeFrame(key.Topic, key.Symbol));
+            frames.Add(BuildFrame(BitgetWsProtocol.OpSubscribe, key));
         }
+
+        return frames;
+    }
+
+    // login 成功 ack 到达（在接收循环线程上）：补发订阅、上报 Connected、启动 ping
+    private void OnLoginSuccess()
+    {
+        IWsTransport? transport;
+        lock (_gate)
+        {
+            _loginReady = true;
+            transport = _transport;
+        }
+
+        if (transport is null)
+            return;
+
+        foreach (var frame in CollectSubscribeFrames())
+            _ = SendSafeAsync(transport, frame);
 
         _reportState(ConnectionState.Connected);
         StartPingLoop(transport);
@@ -259,6 +323,13 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
 
         if (envelope.Event is not null)
         {
+            // 私有端点 login 成功 ack：此时才允许补订阅
+            if (_credentials is not null && BitgetWsProtocol.IsLoginSuccess(envelope))
+            {
+                OnLoginSuccess();
+                return;
+            }
+
             // 订阅/退订 ack 成功无需处理；error ack 路由给该频道全部订阅者，不得静默丢弃（Gate 同款坑）
             if (BitgetWsProtocol.IsErrorAck(envelope))
             {
@@ -273,6 +344,11 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
                 foreach (var affectedEntry in affected)
                     affectedEntry.Updates.OnError(new InvalidOperationException(
                         $"Bitget WS subscription rejected on {envelope.Arg?.Topic ?? "unknown"}: [{envelope.Code}] {envelope.Msg}"));
+
+                // login 失败（无 arg 的 error，如 30005）服务端会断连；主动 Abort 让接收循环立即进入重连，不依赖服务端动作
+                if (_credentials is not null && envelope.Arg is null)
+                    lock (_gate)
+                        _transport?.Abort();
             }
 
             return;
@@ -283,7 +359,8 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
 
         SubscriptionEntry? entry;
         lock (_gate)
-            _entries.TryGetValue(new SubscriptionKey(envelope.Arg.Topic, envelope.Arg.Symbol), out entry);
+            // 账户级 order 频道的 arg 不带 symbol，归一化为注册键的空串占位
+            _entries.TryGetValue(new SubscriptionKey(envelope.Arg.Topic, envelope.Arg.Symbol ?? string.Empty), out entry);
 
         entry?.Updates.OnNext(envelope);
     }
@@ -330,8 +407,12 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
         transport?.Dispose();
 
         lock (_gate)
+        {
             foreach (var entry in _entries.Values)
                 entry.Subscribed = false;
+            // 重连后需重新 login，login 成功 ack 会重新翻开
+            _loginReady = false;
+        }
 
         if (!sessionToken.IsCancellationRequested)
             _reportState(ConnectionState.Disconnected);
@@ -346,14 +427,24 @@ internal sealed class BitgetSpotWsClient : IAsyncDisposable
             if (entry.Subscribed || entry.RefCount == 0)
                 return;
 
+            // 私有端点 login 成功前不立即发送，交给 OnLoginSuccess 的统一补订阅
+            if (_credentials is not null && !_loginReady)
+                return;
+
             transport = _transport;
             if (transport is not null)
                 entry.Subscribed = true;
         }
 
         if (transport is not null)
-            _ = SendSafeAsync(transport, BitgetWsProtocol.BuildSubscribeFrame(key.Topic, key.Symbol));
+            _ = SendSafeAsync(transport, BuildFrame(BitgetWsProtocol.OpSubscribe, key));
     }
+
+    // 私有 order 频道是账户级订阅（instType=UTA、不带 symbol），与公共频道的 spot+symbol 形态不同
+    private static string BuildFrame(string op, SubscriptionKey key) =>
+        key.Topic == BitgetWsProtocol.TopicOrder
+            ? BitgetWsProtocol.BuildOrderChannelFrame(op)
+            : BitgetWsProtocol.BuildFrame(op, key.Topic, key.Symbol);
 
     private void SendIfConnected(string frame)
     {

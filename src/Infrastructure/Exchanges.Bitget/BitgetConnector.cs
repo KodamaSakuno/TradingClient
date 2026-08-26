@@ -12,19 +12,25 @@ using TradingClient.Exchanges.Common;
 
 namespace TradingClient.Exchanges.Bitget;
 
-public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccountService, IAsyncDisposable
+public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccountService, ISpotTrading, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.bitget.com";
     // 文档不一致：rest-api.md 的表写 /v2/ws/public，quick-start.md 与模拟盘 wspap 均为 /v3，以 quick-start 为准
     public const string DefaultWsUrl = "wss://ws.bitget.com/v3/ws/public";
     public const string DemoWsUrl = "wss://wspap.bitget.com/v3/ws/public";
+    // 私有频道与公共频道是两个独立端点（模拟盘为 wspap 域名）
+    public const string DefaultPrivateWsUrl = "wss://ws.bitget.com/v3/ws/private";
+    public const string DemoPrivateWsUrl = "wss://wspap.bitget.com/v3/ws/private";
 
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly BitgetSpotWsClient _wsClient;
+    private readonly BitgetSpotWsClient _privateWsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly BitgetCredentials? _credentials;
     private readonly bool _demoTrading;
+    // 下单/撤单限频各 10次/秒/UID，共用一个令牌桶宁保守勿激进（§7）
+    private readonly TokenBucketRateLimiter _spotRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（BitgetAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
 
@@ -36,8 +42,14 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
         BitgetCredentials? credentials = null,
         bool demoTrading = false,
         string? wsUrl = null,
-        IWebProxy? wsProxy = null)
-        : this(httpClient, baseUrl, new Uri(wsUrl ?? (demoTrading ? DemoWsUrl : DefaultWsUrl)), () => new ClientWebSocketTransport(wsProxy), credentials, demoTrading, authInnerHandler: null)
+        IWebProxy? wsProxy = null,
+        string? privateWsUrl = null)
+        : this(httpClient, baseUrl,
+            new Uri(wsUrl ?? (demoTrading ? DemoWsUrl : DefaultWsUrl)),
+            () => new ClientWebSocketTransport(wsProxy),
+            credentials, demoTrading,
+            privateWsEndpoint: new Uri(privateWsUrl ?? (demoTrading ? DemoPrivateWsUrl : DefaultPrivateWsUrl)),
+            authInnerHandler: null)
     {
     }
 
@@ -49,14 +61,20 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
         BitgetCredentials? credentials,
         bool demoTrading,
         TimeSpan? wsPingInterval = null,
-        HttpMessageHandler? authInnerHandler = null)
+        HttpMessageHandler? authInnerHandler = null,
+        Uri? privateWsEndpoint = null,
+        TokenBucketRateLimiter? spotRateLimiter = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
         _credentials = credentials;
         _demoTrading = demoTrading;
         _authInnerHandler = authInnerHandler;
+        _spotRateLimiter = spotRateLimiter ?? new TokenBucketRateLimiter(capacity: 10, refillPerSecond: 10);
         _wsClient = new BitgetSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
+        _privateWsClient = new BitgetSpotWsClient(
+            privateWsEndpoint ?? new Uri(demoTrading ? DemoPrivateWsUrl : DefaultPrivateWsUrl),
+            wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval, credentials, _timeSync);
     }
 
     public override string ExchangeId => "Bitget";
@@ -178,10 +196,94 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     public Task<Result> TransferFundsAsync(TransferRequest req, CancellationToken ct) =>
         throw new NotImplementedException();
 
+    public IObservable<SpotOrderUpdate> SpotOrderUpdates => _privateWsClient.SubscribeSpotOrderUpdates();
+
+    public async Task<Result<SpotOrder>> PlaceSpotOrderAsync(PlaceSpotOrderRequest req, CancellationToken ct)
+    {
+        if (req.Quantity <= 0)
+            return Result.Failure<SpotOrder>(new ExchangeError("INVALID_QUANTITY", "Quantity must be positive."));
+        if (req is { Type: OrderType.Limit, Price: null })
+            return Result.Failure<SpotOrder>(new ExchangeError("MISSING_PRICE", "Limit order requires a price."));
+        // 决策（§7 数量语义，与 Gate 同款处理）：领域 Quantity 统一为 base 币数量，而 Bitget 市价买单的
+        // qty 是 quote 币金额，不经行情换算无法映射，直接拒单；限价单与市价卖单的 qty 均为 base 币数量
+        if (req is { Type: OrderType.Market, Side: OrderSide.Buy })
+            return Result.Failure<SpotOrder>(new ExchangeError(
+                "UNSUPPORTED_ORDER",
+                "Bitget market buy qty is a quote-currency amount; domain Quantity is a base-currency quantity. Conversion requires market data and is not supported yet."));
+        if (_credentials is null)
+            return Result.Failure<SpotOrder>(new ExchangeError(
+                "MISSING_CREDENTIALS", "Bitget authenticated endpoints require credentials."));
+
+        await _spotRateLimiter.WaitAsync(ct);
+
+        var body = new BitgetPlaceOrderRequest(
+            "SPOT",
+            BitgetSymbolFormatter.FormatSpot(RequireSpot(req.Symbol)),
+            req.Side == OrderSide.Buy ? "buy" : "sell",
+            req.Type == OrderType.Limit ? "limit" : "market",
+            req.Quantity.ToString(CultureInfo.InvariantCulture),
+            req.Price?.ToString(CultureInfo.InvariantCulture),
+            req.Type == OrderType.Limit ? "gtc" : null);
+
+        using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
+            "api/v3/trade/place-order", body, BitgetJsonContext.Default.BitgetPlaceOrderRequest, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure<SpotOrder>(await BitgetErrorMapper.FromResponseAsync(response, ct));
+
+        var envelope = await response.Content.ReadFromJsonAsync(
+            BitgetJsonContext.Default.BitgetResponseBitgetOrderAck, ct);
+        // Bitget 怪癖：HTTP 200 也可能返回业务错误（code != "00000"，如 40010），信封与 HTTP 状态都要检查
+        if (envelope?.Data is null || envelope.Code != "00000")
+            return Result.Failure<SpotOrder>(new ExchangeError(
+                envelope?.Code ?? "EMPTY_DATA",
+                envelope?.Msg ?? "Bitget returned empty order data."));
+
+        // V3 下单响应不含订单状态（仅 orderId/clientOid），成交以 order 频道推送为准：
+        // 用请求参数 + 返回 ID 构造，FilledQuantity=0、Status=New
+        return Result.Success(new SpotOrder(
+            envelope.Data.OrderId,
+            req.Symbol,
+            req.Side,
+            req.Type,
+            req.Price,
+            req.Quantity,
+            FilledQuantity: 0m,
+            OrderStatus.New,
+            DateTimeOffset.UtcNow));
+    }
+
+    public async Task<Result> CancelSpotOrderAsync(Symbol symbol, string orderId, CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure(new ExchangeError(
+                "MISSING_CREDENTIALS", "Bitget authenticated endpoints require credentials."));
+
+        await _spotRateLimiter.WaitAsync(ct);
+
+        // 撤单 body 只需 orderId + category，不带 symbol；仍校验符号类型以拒绝非现货 Symbol
+        _ = RequireSpot(symbol);
+        var body = new BitgetCancelOrderRequest(orderId, "SPOT");
+        using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
+            "api/v3/trade/cancel-order", body, BitgetJsonContext.Default.BitgetCancelOrderRequest, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure(await BitgetErrorMapper.FromResponseAsync(response, ct));
+
+        var envelope = await response.Content.ReadFromJsonAsync(
+            BitgetJsonContext.Default.BitgetResponseBitgetOrderAck, ct);
+        // 与下单相同：HTTP 200 下的业务错误信封也算失败
+        if (envelope?.Data is null || envelope.Code != "00000")
+            return Result.Failure(new ExchangeError(
+                envelope?.Code ?? "EMPTY_DATA",
+                envelope?.Msg ?? "Bitget returned empty cancel data."));
+
+        return Result.Success();
+    }
+
     public async ValueTask DisposeAsync()
     {
         _authenticatedHttpClient?.Dispose();
         await _wsClient.DisposeAsync();
+        await _privateWsClient.DisposeAsync();
     }
 
     private static SpotSymbol RequireSpot(Symbol symbol) =>

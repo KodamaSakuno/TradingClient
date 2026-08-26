@@ -13,6 +13,8 @@
     <Content Include="Fixtures\gate_spot_order_update.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\bitget_v3_spot_instruments.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\bitget_v3_account_assets.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\bitget_v3_spot_order_placed.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\bitget_v3_order_update.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

@@ -7,7 +7,16 @@ namespace TradingClient.Exchanges.Bitget.Models;
 // 订阅帧：{"op":"subscribe","args":[{"instType":"spot","topic":"ticker","symbol":"BTCUSDT"}]}
 internal sealed record BitgetWsRequest(string Op, BitgetWsChannelArg[] Args);
 
-internal sealed record BitgetWsChannelArg(string InstType, string Topic, string Symbol);
+// 私有频道（如账户级 order）的 arg 不带 symbol，序列化时省略
+internal sealed record BitgetWsChannelArg(
+    string InstType,
+    string Topic,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Symbol);
+
+// 私有端点登录帧：{"op":"login","args":[{"apiKey":"...","passphrase":"...","timestamp":"...","sign":"..."}]}
+internal sealed record BitgetWsLoginRequest(string Op, BitgetWsLoginArg[] Args);
+
+internal sealed record BitgetWsLoginArg(string ApiKey, string Passphrase, string Timestamp, string Sign);
 
 /// <summary>
 /// 入站信封同时覆盖两种形态：
@@ -49,3 +58,23 @@ internal sealed record BitgetWsBook(
     long Seq,
     long Pseq,
     [property: JsonPropertyName("ts")] string? MatchTimestampMs);
+
+/// <summary>
+/// 私有 order 频道 data 项（.local/bitget/uta/websocket/private/Order-Channel.md）；
+/// 数值与时间戳字段均为字符串，createdTime/updatedTime 为毫秒
+/// </summary>
+internal sealed record BitgetWsOrder(
+    string? Category,
+    string? Symbol,
+    string? OrderId,
+    string? ClientOid,
+    string? Price,
+    string? Qty,
+    string? Side,
+    string? OrderType,
+    string? TimeInForce,
+    string? CumExecQty,
+    string? AvgPrice,
+    string? OrderStatus,
+    string? CreatedTime,
+    string? UpdatedTime);

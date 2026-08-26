@@ -1,0 +1,26 @@
+{
+  "action": "snapshot",
+  "arg": {
+    "instType": "UTA",
+    "topic": "order"
+  },
+  "data": [
+    {
+      "category": "spot",
+      "symbol": "BTCUSDT",
+      "orderId": "121211212122",
+      "clientOid": "bitget-contract-test",
+      "price": "60000",
+      "qty": "0.01",
+      "side": "sell",
+      "orderType": "limit",
+      "timeInForce": "gtc",
+      "cumExecQty": "0",
+      "avgPrice": "",
+      "orderStatus": "new",
+      "createdTime": "1742367838101",
+      "updatedTime": "1742367838101"
+    }
+  ],
+  "ts": 1742367838110
+}

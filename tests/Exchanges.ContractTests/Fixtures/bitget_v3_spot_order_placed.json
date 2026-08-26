@@ -1,0 +1,9 @@
+{
+  "code": "00000",
+  "msg": "success",
+  "requestTime": 1695806875837,
+  "data": {
+    "orderId": "121211212122",
+    "clientOid": "bitget-contract-test"
+  }
+}
