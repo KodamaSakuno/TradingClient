@@ -215,10 +215,17 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
 
         foreach (var (key, entry) in active)
         {
+            // 与 SendSubscribeIfConnected 约定：谁先把 Subscribed 翻成 true 谁负责发送，防止两条路径重复发 subscribe
+            lock (_gate)
+            {
+                if (entry.Subscribed)
+                    continue;
+
+                entry.Subscribed = true;
+            }
+
             await SendSafeAsync(transport, GateWsProtocol.BuildRequestFrame(
                 key.Channel, GateWsProtocol.EventSubscribe, entry.Payload));
-            lock (_gate)
-                entry.Subscribed = true;
         }
 
         _reportState(ConnectionState.Connected);
