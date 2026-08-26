@@ -1,0 +1,27 @@
+{
+  "time": 1710488335,
+  "time_ms": 1710488335000,
+  "channel": "spot.orders",
+  "event": "update",
+  "result": [
+    {
+      "id": "62167231234",
+      "text": "apiv4",
+      "currency_pair": "BTC_USDT",
+      "type": "limit",
+      "account": "spot",
+      "side": "buy",
+      "amount": "0.01",
+      "price": "50000",
+      "time_in_force": "gtc",
+      "left": "0.01",
+      "filled_total": "0",
+      "filled_amount": "0",
+      "avg_deal_price": "0",
+      "create_time_ms": "1710488334073",
+      "update_time_ms": "1710488334074",
+      "event": "put",
+      "finish_as": "open"
+    }
+  ]
+}

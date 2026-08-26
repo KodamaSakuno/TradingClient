@@ -4,6 +4,8 @@ using System.Reactive.Subjects;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
+using TradingClient.Exchanges.Common;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.Models;
 
 namespace TradingClient.Exchanges.Gate.WebSocket;
@@ -20,6 +22,8 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
     private readonly Action<ConnectionState> _reportState;
     private readonly Func<Func<CancellationToken, Task>, CancellationToken, Task> _reconnect;
     private readonly TimeSpan _pingInterval;
+    private readonly GateCredentials? _credentials;
+    private readonly ServerTimeSync? _timeSync;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<SubscriptionKey, SubscriptionEntry> _entries = new();
@@ -37,32 +41,56 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         Func<IGateWsTransport> transportFactory,
         Action<ConnectionState> reportState,
         Func<Func<CancellationToken, Task>, CancellationToken, Task> reconnect,
-        TimeSpan? pingInterval = null)
+        TimeSpan? pingInterval = null,
+        GateCredentials? credentials = null,
+        ServerTimeSync? timeSync = null)
     {
         _endpoint = endpoint;
         _transportFactory = transportFactory;
         _reportState = reportState;
         _reconnect = reconnect;
         _pingInterval = pingInterval ?? s_defaultPingInterval;
+        _credentials = credentials;
+        _timeSync = timeSync;
     }
 
     public IObservable<Quote> SubscribeQuotes(SpotSymbol symbol) =>
-        Subscribe(GateWsProtocol.ChannelTickers, symbol, [GateSymbolFormatter.FormatSpot(symbol)], GateWsProtocol.ToQuote);
+        Subscribe(GateWsProtocol.ChannelTickers, GateSymbolFormatter.FormatSpot(symbol), [GateSymbolFormatter.FormatSpot(symbol)], GateWsProtocol.ToQuote);
 
     public IObservable<Trade> SubscribeTrades(SpotSymbol symbol) =>
-        Subscribe(GateWsProtocol.ChannelTrades, symbol, [GateSymbolFormatter.FormatSpot(symbol)], GateWsProtocol.ToTrade);
+        Subscribe(GateWsProtocol.ChannelTrades, GateSymbolFormatter.FormatSpot(symbol), [GateSymbolFormatter.FormatSpot(symbol)], GateWsProtocol.ToTrade);
 
     public IObservable<OrderBookDelta> SubscribeOrderBook(SpotSymbol symbol) =>
         Subscribe(
             GateWsProtocol.ChannelOrderBookUpdate,
-            symbol,
+            GateSymbolFormatter.FormatSpot(symbol),
             [GateSymbolFormatter.FormatSpot(symbol), GateWsProtocol.OrderBookInterval],
             GateWsProtocol.ToOrderBookDelta);
 
-    private IObservable<T> Subscribe<T>(
-        string channel, SpotSymbol symbol, string[] payload, Func<GateWsEnvelope, T?> map) where T : class
+    public IObservable<SpotOrderUpdate> SubscribeSpotOrderUpdates()
     {
-        var key = new SubscriptionKey(channel, GateSymbolFormatter.FormatSpot(symbol));
+        // 私有频道无凭证必然被 Gate 拒（error code 4）：订阅时直接给错误，比连上后静默失败更明确
+        if (_credentials is null)
+            return Observable.Create<SpotOrderUpdate>(observer =>
+            {
+                observer.OnError(new InvalidOperationException("Gate private channels require credentials."));
+                return Disposable.Empty;
+            });
+
+        // 一条通知可含多个订单，故按数组映射后再展开
+        return Subscribe(
+                GateWsProtocol.ChannelOrders,
+                GateWsProtocol.OrdersAllPairs,
+                [GateWsProtocol.OrdersAllPairs],
+                GateWsProtocol.ToSpotOrderUpdates)
+            .SelectMany(updates => updates);
+    }
+
+    // symbolKey 即订阅路由键：公共频道为交易对，spot.orders 固定为 "!all"（result 是数组，无 symbol 维度）
+    private IObservable<T> Subscribe<T>(
+        string channel, string symbolKey, string[] payload, Func<GateWsEnvelope, T?> map) where T : class
+    {
+        var key = new SubscriptionKey(channel, symbolKey);
 
         return Observable.Create<T>(observer =>
         {
@@ -135,8 +163,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         if (lastForKey)
         {
             entry.Updates.OnCompleted();
-            SendIfConnected(GateWsProtocol.BuildRequestFrame(
-                key.Channel, GateWsProtocol.EventUnsubscribe, entry.Payload));
+            SendIfConnected(BuildRequestFrame(key.Channel, GateWsProtocol.EventUnsubscribe, entry.Payload));
         }
     }
 
@@ -224,7 +251,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
                 entry.Subscribed = true;
             }
 
-            await SendSafeAsync(transport, GateWsProtocol.BuildRequestFrame(
+            await SendSafeAsync(transport, BuildRequestFrame(
                 key.Channel, GateWsProtocol.EventSubscribe, entry.Payload));
         }
 
@@ -268,7 +295,10 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         if (envelope.Event != GateWsProtocol.EventUpdate)
             return; // subscribe/unsubscribe 的 ack 无需处理
 
-        var symbol = GateWsProtocol.ExtractSymbol(envelope);
+        // spot.orders 的 result 是订单数组且按 !all 订阅，无 symbol 维度，直接按频道路由
+        var symbol = envelope.Channel == GateWsProtocol.ChannelOrders
+            ? GateWsProtocol.OrdersAllPairs
+            : GateWsProtocol.ExtractSymbol(envelope);
         if (symbol is null)
             return;
 
@@ -343,8 +373,18 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         }
 
         if (transport is not null)
-            _ = SendSafeAsync(transport, GateWsProtocol.BuildRequestFrame(
+            _ = SendSafeAsync(transport, BuildRequestFrame(
                 key.Channel, GateWsProtocol.EventSubscribe, entry.Payload));
+    }
+
+    private string BuildRequestFrame(string channel, string evt, string[] payload)
+    {
+        if (!GateWsProtocol.IsPrivateChannel(channel))
+            return GateWsProtocol.BuildRequestFrame(channel, evt, payload);
+
+        // 私有频道请求体携带 auth；帧 time 与签名 time 必须一致，用校时后的时钟
+        var timestamp = (_timeSync?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+        return GateWsProtocol.BuildAuthenticatedRequestFrame(channel, evt, payload, _credentials!, timestamp);
     }
 
     private void SendIfConnected(string frame)

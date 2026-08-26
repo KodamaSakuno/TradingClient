@@ -48,7 +48,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         _credentials = credentials;
         _authInnerHandler = authInnerHandler;
         _spotRateLimiter = spotRateLimiter ?? new TokenBucketRateLimiter(capacity: 10, refillPerSecond: 10);
-        _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
+        _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval, credentials, _timeSync);
     }
 
     public override string ExchangeId => "Gate";
@@ -160,8 +160,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     public Task<Result> TransferFundsAsync(TransferRequest req, CancellationToken ct) =>
         throw new NotImplementedException();
 
-    // WS 私有频道（spot.orders）尚未接入，下一步实现
-    public IObservable<SpotOrderUpdate> SpotOrderUpdates => throw new NotImplementedException();
+    public IObservable<SpotOrderUpdate> SpotOrderUpdates => _wsClient.SubscribeSpotOrderUpdates();
 
     public async Task<Result<SpotOrder>> PlaceSpotOrderAsync(PlaceSpotOrderRequest req, CancellationToken ct)
     {

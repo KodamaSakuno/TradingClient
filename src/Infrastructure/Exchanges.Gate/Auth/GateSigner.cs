@@ -18,4 +18,13 @@ internal static class GateSigner
         using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(apiSecret));
         return Convert.ToHexStringLower(hmac.ComputeHash(Encoding.UTF8.GetBytes(signatureString)));
     }
+
+    // WS 私有频道签名串与 REST 不同：channel=<channel>&event=<event>&time=<time>（.local/gate_api_spot_ws.txt 鉴权一节）
+    public static string SignWs(string apiSecret, string channel, string evt, long unixTimestamp)
+    {
+        var signatureString = $"channel={channel}&event={evt}&time={unixTimestamp}";
+
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(apiSecret));
+        return Convert.ToHexStringLower(hmac.ComputeHash(Encoding.UTF8.GetBytes(signatureString)));
+    }
 }

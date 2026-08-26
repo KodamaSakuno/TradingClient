@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Infrastructure.Tests;
@@ -193,6 +194,158 @@ public class GateWsProtocolTests
     public void ParseEnvelope_WithMalformedJson_ReturnsNull()
     {
         Assert.Null(GateWsProtocol.ParseEnvelope("not json"));
+    }
+
+    private const string OrderPutNotificationJson = """
+        {
+          "time": 1694655225,
+          "time_ms": 1694655225315,
+          "channel": "spot.orders",
+          "event": "update",
+          "result": [
+            {
+              "id": "399123456",
+              "currency_pair": "BTC_USDT",
+              "type": "limit",
+              "account": "spot",
+              "side": "sell",
+              "amount": "0.0001",
+              "price": "26253.3",
+              "time_in_force": "gtc",
+              "left": "0.0001",
+              "filled_total": "0",
+              "filled_amount": "0",
+              "create_time_ms": "1694655225000",
+              "update_time_ms": "1694655225315",
+              "event": "put",
+              "finish_as": "open"
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void ToSpotOrderUpdates_WithPutEvent_MapsNewOrder()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(OrderPutNotificationJson)!;
+
+        var updates = GateWsProtocol.ToSpotOrderUpdates(envelope);
+
+        var update = Assert.Single(updates!);
+        var order = update.Order;
+        Assert.Equal("399123456", order.OrderId);
+        Assert.Equal(new SpotSymbol("BTC", "USDT"), order.Symbol);
+        Assert.Equal(OrderSide.Sell, order.Side);
+        Assert.Equal(OrderType.Limit, order.Type);
+        Assert.Equal(26253.3m, order.Price);
+        Assert.Equal(0.0001m, order.Quantity);
+        Assert.Equal(0m, order.FilledQuantity);
+        Assert.Equal(OrderStatus.New, order.Status);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1694655225000), order.CreatedAt);
+        // SpotOrderUpdate.Timestamp 用信封 time_ms
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1694655225315), update.Timestamp);
+    }
+
+    [Fact]
+    public void ToSpotOrderUpdates_WithPartialFillUpdateEvent_MapsPartiallyFilled()
+    {
+        var json = OrderPutNotificationJson
+            .Replace("\"left\": \"0.0001\"", "\"left\": \"0.00006\"")
+            .Replace("\"event\": \"put\"", "\"event\": \"update\"");
+        var envelope = GateWsProtocol.ParseEnvelope(json)!;
+
+        var update = Assert.Single(GateWsProtocol.ToSpotOrderUpdates(envelope)!);
+
+        Assert.Equal(OrderStatus.PartiallyFilled, update.Order.Status);
+        Assert.Equal(0.00004m, update.Order.FilledQuantity);
+    }
+
+    [Fact]
+    public void ToSpotOrderUpdates_WithFinishFilledEvent_MapsFilled()
+    {
+        var json = OrderPutNotificationJson
+            .Replace("\"left\": \"0.0001\"", "\"left\": \"0\"")
+            .Replace("\"event\": \"put\"", "\"event\": \"finish\"")
+            .Replace("\"finish_as\": \"open\"", "\"finish_as\": \"filled\"");
+        var envelope = GateWsProtocol.ParseEnvelope(json)!;
+
+        var update = Assert.Single(GateWsProtocol.ToSpotOrderUpdates(envelope)!);
+
+        Assert.Equal(OrderStatus.Filled, update.Order.Status);
+        Assert.Equal(0.0001m, update.Order.FilledQuantity);
+    }
+
+    // cancelled/ioc/stp/poc/fok 等非 filled 的 finish_as 一律归入 Cancelled
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("ioc")]
+    [InlineData("stp")]
+    [InlineData("fok")]
+    public void ToSpotOrderUpdates_WithFinishNotFilled_MapsCancelled(string finishAs)
+    {
+        var json = OrderPutNotificationJson
+            .Replace("\"event\": \"put\"", "\"event\": \"finish\"")
+            .Replace("\"finish_as\": \"open\"", $"\"finish_as\": \"{finishAs}\"");
+        var envelope = GateWsProtocol.ParseEnvelope(json)!;
+
+        var update = Assert.Single(GateWsProtocol.ToSpotOrderUpdates(envelope)!);
+
+        Assert.Equal(OrderStatus.Cancelled, update.Order.Status);
+    }
+
+    [Fact]
+    public void ToSpotOrderUpdates_WithMarketOrder_MapsNullPrice()
+    {
+        var json = OrderPutNotificationJson
+            .Replace("\"type\": \"limit\"", "\"type\": \"market\"")
+            .Replace("\"price\": \"26253.3\"", "\"price\": \"0\"");
+        var envelope = GateWsProtocol.ParseEnvelope(json)!;
+
+        var update = Assert.Single(GateWsProtocol.ToSpotOrderUpdates(envelope)!);
+
+        Assert.Equal(OrderType.Market, update.Order.Type);
+        Assert.Null(update.Order.Price);
+    }
+
+    [Fact]
+    public void ToSpotOrderUpdates_WithNonArrayResult_ReturnsNull()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(TickerUpdateJson)!;
+
+        Assert.Null(GateWsProtocol.ToSpotOrderUpdates(envelope));
+    }
+
+    [Fact]
+    public void BuildAuthenticatedRequestFrame_Always_CarriesApiKeyAuthWithMatchingSign()
+    {
+        var credentials = new GateCredentials("test-key", "test-secret");
+
+        var frame = GateWsProtocol.BuildAuthenticatedRequestFrame(
+            GateWsProtocol.ChannelOrders, GateWsProtocol.EventSubscribe, ["!all"], credentials, 1541993715);
+
+        using var doc = JsonDocument.Parse(frame);
+        var root = doc.RootElement;
+        Assert.Equal(1541993715, root.GetProperty("time").GetInt64());
+        Assert.Equal("spot.orders", root.GetProperty("channel").GetString());
+        Assert.Equal(["!all"],
+            root.GetProperty("payload").EnumerateArray().Select(e => e.GetString()).ToArray());
+        var auth = root.GetProperty("auth");
+        Assert.Equal("api_key", auth.GetProperty("method").GetString());
+        Assert.Equal("test-key", auth.GetProperty("KEY").GetString());
+        // 帧内 time 与签名 time 必须一致
+        Assert.Equal(
+            GateSigner.SignWs("test-secret", "spot.orders", "subscribe", 1541993715),
+            auth.GetProperty("SIGN").GetString());
+    }
+
+    [Fact]
+    public void BuildRequestFrame_ForPublicChannel_HasNoAuthField()
+    {
+        var frame = GateWsProtocol.BuildRequestFrame(
+            GateWsProtocol.ChannelTickers, GateWsProtocol.EventSubscribe, ["BTC_USDT"]);
+
+        using var doc = JsonDocument.Parse(frame);
+        Assert.False(doc.RootElement.TryGetProperty("auth", out _));
     }
 
     [Fact]

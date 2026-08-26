@@ -62,4 +62,24 @@ public class GateSignerTests
             GateSigner.Sign("s", "GET", "/p", null, null, 1),
             GateSigner.Sign("s", "get", "/p", null, null, 1));
     }
+
+    // WS 签名串为 channel=<channel>&event=<event>&time=<time>（.local/gate_api_spot_ws.txt 鉴权一节）；
+    // 期望值用 HMAC-SHA512(secret, 该串) 独立计算核对，2026-08-26
+    [Fact]
+    public void SignWs_Always_SignsChannelEventTimeString()
+    {
+        var sign = GateSigner.SignWs("secret", "spot.orders", "subscribe", 1541993715);
+
+        Assert.Equal(
+            "e9c13b956612d4af11a7fd2025729fe28979b16153cf00e3aff2e4c7dd0155f413dce9fdff2297d9f62bda58c0463792dab6163597b9095f9600ed0d61990a34",
+            sign);
+    }
+
+    [Fact]
+    public void SignWs_EventDiffers_ProducesDifferentSignature()
+    {
+        Assert.NotEqual(
+            GateSigner.SignWs("s", "spot.orders", "subscribe", 1),
+            GateSigner.SignWs("s", "spot.orders", "unsubscribe", 1));
+    }
 }

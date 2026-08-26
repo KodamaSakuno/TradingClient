@@ -1,6 +1,8 @@
+using System.Reactive.Linq;
 using System.Text.Json;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Infrastructure.Tests;
@@ -174,12 +176,126 @@ public class GateSpotWsClientTests
             "spot.ping frame");
     }
 
-    private static GateSpotWsClient CreateClient(FakeWsTransport transport, TimeSpan? pingInterval = null) =>
+    private static GateSpotWsClient CreateClient(
+        FakeWsTransport transport, TimeSpan? pingInterval = null, GateCredentials? credentials = null) =>
         new(new Uri("wss://localhost/ws"),
             () => transport,
             _ => { },
             ReconnectImmediately,
-            pingInterval ?? TimeSpan.FromHours(1)); // 默认关掉 ping 干扰，单独用例再开
+            pingInterval ?? TimeSpan.FromHours(1), // 默认关掉 ping 干扰，单独用例再开
+            credentials);
+
+    [Fact]
+    public async Task SubscribeSpotOrderUpdates_WithCredentials_SendsAllPairsSubscribeFrameWithAuth()
+    {
+        var transport = new FakeWsTransport();
+        var credentials = new GateCredentials("test-key", "test-secret");
+        await using var client = CreateClient(transport, credentials: credentials);
+
+        using var sub = client.SubscribeSpotOrderUpdates().Subscribe(new Collector<SpotOrderUpdate>());
+
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+        using var doc = JsonDocument.Parse(transport.SentFrames[0]);
+        var root = doc.RootElement;
+        Assert.Equal("spot.orders", root.GetProperty("channel").GetString());
+        Assert.Equal("subscribe", root.GetProperty("event").GetString());
+        // SpotOrderUpdates 拿不到交易对，固定用 !all 订阅全部交易对
+        Assert.Equal(["!all"],
+            root.GetProperty("payload").EnumerateArray().Select(e => e.GetString()).ToArray());
+        var auth = root.GetProperty("auth");
+        Assert.Equal("api_key", auth.GetProperty("method").GetString());
+        Assert.Equal("test-key", auth.GetProperty("KEY").GetString());
+        Assert.Equal(
+            GateSigner.SignWs("test-secret", "spot.orders", "subscribe", root.GetProperty("time").GetInt64()),
+            auth.GetProperty("SIGN").GetString());
+    }
+
+    [Fact]
+    public async Task SubscribeSpotOrderUpdates_WithoutCredentials_EmitsOnError()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.SubscribeSpotOrderUpdates().FirstAsync());
+
+        Assert.Equal("Gate private channels require credentials.", error.Message);
+        Assert.Equal(0, transport.ConnectCount);
+    }
+
+    [Fact]
+    public async Task OrdersNotification_WithMultipleOrders_DispatchesAllUpdates()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+        var collector = new Collector<SpotOrderUpdate>();
+
+        using var sub = client.SubscribeSpotOrderUpdates().Subscribe(collector);
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        transport.Push("""
+            {
+              "time": 1694655225,
+              "time_ms": 1694655225315,
+              "channel": "spot.orders",
+              "event": "update",
+              "result": [
+                {
+                  "id": "399123456",
+                  "currency_pair": "BTC_USDT",
+                  "type": "limit",
+                  "side": "sell",
+                  "amount": "0.0001",
+                  "price": "26253.3",
+                  "left": "0.0001",
+                  "create_time_ms": "1694655225000",
+                  "update_time_ms": "1694655225315",
+                  "event": "put",
+                  "finish_as": "open"
+                },
+                {
+                  "id": "399123457",
+                  "currency_pair": "ETH_USDT",
+                  "type": "limit",
+                  "side": "buy",
+                  "amount": "0.5",
+                  "price": "1800",
+                  "left": "0",
+                  "create_time_ms": "1694655225001",
+                  "update_time_ms": "1694655225315",
+                  "event": "finish",
+                  "finish_as": "filled"
+                }
+              ]
+            }
+            """);
+
+        await WaitForAsync(() => collector.Items.Count == 2, "two order updates");
+        Assert.Equal("399123456", collector.Items[0].Order.OrderId);
+        Assert.Equal(OrderStatus.New, collector.Items[0].Order.Status);
+        Assert.Equal("399123457", collector.Items[1].Order.OrderId);
+        Assert.Equal(new SpotSymbol("ETH", "USDT"), collector.Items[1].Order.Symbol);
+        Assert.Equal(OrderStatus.Filled, collector.Items[1].Order.Status);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1694655225315), collector.Items[0].Timestamp);
+    }
+
+    [Fact]
+    public async Task UnsubscribeSpotOrderUpdates_LastSubscriber_SendsAuthenticatedUnsubscribeFrame()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+
+        var sub = client.SubscribeSpotOrderUpdates().Subscribe(new Collector<SpotOrderUpdate>());
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        sub.Dispose();
+
+        await WaitForAsync(() => transport.SentFrames.Count == 2, "unsubscribe frame");
+        using var doc = JsonDocument.Parse(transport.SentFrames[1]);
+        var root = doc.RootElement;
+        Assert.Equal("unsubscribe", root.GetProperty("event").GetString());
+        Assert.Equal("k", root.GetProperty("auth").GetProperty("KEY").GetString());
+    }
 
     // 测试用立即重连，替代基类退避策略以免拖慢用例
     private static async Task ReconnectImmediately(Func<CancellationToken, Task> connect, CancellationToken ct)

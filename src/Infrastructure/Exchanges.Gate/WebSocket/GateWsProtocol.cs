@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.Models;
 
 namespace TradingClient.Exchanges.Gate.WebSocket;
@@ -15,6 +16,7 @@ internal static class GateWsProtocol
     public const string ChannelTickers = "spot.tickers";
     public const string ChannelTrades = "spot.trades";
     public const string ChannelOrderBookUpdate = "spot.order_book_update";
+    public const string ChannelOrders = "spot.orders";
     public const string ChannelPing = "spot.ping";
     public const string ChannelPong = "spot.pong";
     public const string ChannelSystem = "spot.system";
@@ -22,6 +24,9 @@ internal static class GateWsProtocol
     public const string EventSubscribe = "subscribe";
     public const string EventUnsubscribe = "unsubscribe";
     public const string EventUpdate = "update";
+
+    // spot.orders 支持 "!all" 订阅全部交易对；SpotOrderUpdates 无参拿不到交易对，故固定用它
+    public const string OrdersAllPairs = "!all";
 
     // order_book_update 只支持 20ms（20 档）/100ms（100 档）两种推送间隔
     // （2024-11 changelog 移除了 1000ms）；选 100ms 换取全量快照时的 100 档深度
@@ -31,6 +36,22 @@ internal static class GateWsProtocol
         JsonSerializer.Serialize(
             new GateWsRequest(NowSeconds(), channel, evt, payload),
             GateJsonContext.Default.GateWsRequest);
+
+    /// <summary>该频道的 subscribe/unsubscribe 请求体必须带 auth（api_key 签名）</summary>
+    public static bool IsPrivateChannel(string channel) => channel == ChannelOrders;
+
+    // 帧的 time 必须与签名串中的 time 一致，由调用方用校时后的时钟统一给出
+    public static string BuildAuthenticatedRequestFrame(
+        string channel, string evt, IReadOnlyList<string> payload, GateCredentials credentials, long unixTimestamp)
+    {
+        var auth = new GateWsAuth(
+            "api_key", credentials.ApiKey,
+            GateSigner.SignWs(credentials.ApiSecret, channel, evt, unixTimestamp));
+
+        return JsonSerializer.Serialize(
+            new GateWsAuthenticatedRequest(unixTimestamp, channel, evt, payload, auth),
+            GateJsonContext.Default.GateWsAuthenticatedRequest);
+    }
 
     public static string BuildPingFrame() =>
         JsonSerializer.Serialize(
@@ -129,6 +150,72 @@ internal static class GateWsProtocol
             ToLevels(update.Asks),
             IsSnapshot: update.Full == true,
             DateTimeOffset.FromUnixTimeMilliseconds(update.UpdateTimeMs));
+    }
+
+    // spot.orders 通知的 result 是订单对象数组，一条通知可含多个交易对的订单（与 tickers 单对象不同）
+    public static SpotOrderUpdate[]? ToSpotOrderUpdates(GateWsEnvelope envelope)
+    {
+        if (envelope.Result.ValueKind != JsonValueKind.Array)
+            return null;
+
+        GateSpotOrderUpdate[]? orders;
+        try
+        {
+            orders = envelope.Result.Deserialize(GateJsonContext.Default.GateSpotOrderUpdateArray);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (orders is null)
+            return null;
+
+        var envelopeTimestamp = envelope.TimeMs is { } ms
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
+            : DateTimeOffset.FromUnixTimeSeconds(envelope.Time);
+
+        return orders
+            .Select(o => new SpotOrderUpdate(ToSpotOrder(o, envelopeTimestamp), envelopeTimestamp))
+            .ToArray();
+    }
+
+    // 字段映射与 GateConnector 的 REST 映射对齐，但状态由 event/finish_as 表达（WS 无 status 字段）
+    private static SpotOrder ToSpotOrder(GateSpotOrderUpdate dto, DateTimeOffset fallbackTimestamp)
+    {
+        var quantity = decimal.Parse(dto.Amount, CultureInfo.InvariantCulture);
+        var left = decimal.Parse(dto.Left, CultureInfo.InvariantCulture);
+        var filled = quantity - left;
+        // 统一账户衍生类型以 market_/limit_ 前缀区分（market_borrow 等）
+        var type = dto.Type.StartsWith("market", StringComparison.Ordinal) ? OrderType.Market : OrderType.Limit;
+
+        var status = dto.Event switch
+        {
+            "put" => OrderStatus.New,
+            "update" => filled > 0 ? OrderStatus.PartiallyFilled : OrderStatus.New,
+            // cancelled/ioc/stp/poc/fok 等一律归入 Cancelled（部分成交量体现在 FilledQuantity）
+            "finish" => dto.FinishAs == "filled" ? OrderStatus.Filled : OrderStatus.Cancelled,
+            // 未知事件视为协议漂移（坏消息）：Subscribe 管线捕获异常后跳过该帧
+            _ => throw new NotSupportedException($"Unknown Gate spot order event '{dto.Event}'."),
+        };
+
+        var createdAt = long.TryParse(dto.CreateTimeMs, NumberStyles.Integer, CultureInfo.InvariantCulture, out var createMs)
+            ? DateTimeOffset.FromUnixTimeMilliseconds(createMs)
+            : fallbackTimestamp;
+
+        return new SpotOrder(
+            dto.Id,
+            GateSymbolFormatter.ParseSpot(dto.CurrencyPair),
+            dto.Side == "buy" ? OrderSide.Buy : OrderSide.Sell,
+            type,
+            // market 单领域语义 Price=null
+            type == OrderType.Market || dto.Price is null
+                ? null
+                : decimal.Parse(dto.Price, CultureInfo.InvariantCulture),
+            quantity,
+            filled,
+            status,
+            createdAt);
     }
 
     // 数量为 0 的档位原样透传：表示删除该价位，删档动作由上层盘口维护逻辑执行

@@ -9,10 +9,12 @@ namespace TradingClient.Exchanges.Gate.Models;
 [JsonSerializable(typeof(GateApiError))]
 [JsonSerializable(typeof(GateServerTime))]
 [JsonSerializable(typeof(GateWsRequest))]
+[JsonSerializable(typeof(GateWsAuthenticatedRequest))]
 [JsonSerializable(typeof(GateWsPingRequest))]
 [JsonSerializable(typeof(GateWsEnvelope))]
 [JsonSerializable(typeof(GateTicker))]
 [JsonSerializable(typeof(GateTrade))]
 [JsonSerializable(typeof(GateOrderBookUpdate))]
+[JsonSerializable(typeof(GateSpotOrderUpdate[]))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 internal sealed partial class GateJsonContext : JsonSerializerContext;
