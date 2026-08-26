@@ -6,15 +6,35 @@ using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
 using TradingClient.Exchanges.Common;
 using TradingClient.Exchanges.Gate.Models;
+using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Exchanges.Gate;
 
-public sealed class GateConnector(HttpClient httpClient, string baseUrl = GateConnector.DefaultBaseUrl)
-    : ExchangeConnectorBase, IMarketData
+public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.gateio.ws";
+    public const string DefaultWsUrl = "wss://api.gateio.ws/ws/v4/";
 
-    private readonly string _baseUrl = baseUrl.TrimEnd('/');
+    private readonly HttpClient _httpClient;
+    private readonly string _baseUrl;
+    private readonly GateSpotWsClient _wsClient;
+
+    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl)
+        : this(httpClient, baseUrl, new Uri(DefaultWsUrl), () => new ClientWebSocketTransport())
+    {
+    }
+
+    internal GateConnector(
+        HttpClient httpClient,
+        string baseUrl,
+        Uri wsEndpoint,
+        Func<IGateWsTransport> wsTransportFactory,
+        TimeSpan? wsPingInterval = null)
+    {
+        _httpClient = httpClient;
+        _baseUrl = baseUrl.TrimEnd('/');
+        _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
+    }
 
     public override string ExchangeId => "Gate";
 
@@ -34,20 +54,26 @@ public sealed class GateConnector(HttpClient httpClient, string baseUrl = GateCo
         if (product != ProductKind.Spot)
             throw new NotSupportedException($"Gate {product} instruments are not supported yet.");
 
-        var pairs = await httpClient.GetFromJsonAsync(
+        var pairs = await _httpClient.GetFromJsonAsync(
             $"{_baseUrl}/api/v4/spot/currency_pairs",
             GateJsonContext.Default.GateCurrencyPairArray, ct);
 
         return pairs?.Select(ToInstrument).ToArray() ?? [];
     }
 
-    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => _wsClient.SubscribeQuotes(RequireSpot(symbol));
 
-    public IObservable<Trade> SubscribeTrades(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<Trade> SubscribeTrades(Symbol symbol) => _wsClient.SubscribeTrades(RequireSpot(symbol));
 
-    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => throw new NotImplementedException();
+    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => _wsClient.SubscribeOrderBook(RequireSpot(symbol));
 
     public IObservable<Candle> SubscribeCandles(Symbol symbol, TimeFrame tf) => throw new NotImplementedException();
+
+    public ValueTask DisposeAsync() => _wsClient.DisposeAsync();
+
+    private static SpotSymbol RequireSpot(Symbol symbol) =>
+        symbol as SpotSymbol
+        ?? throw new NotSupportedException($"Gate spot market data does not support symbol type {symbol.GetType().Name}.");
 
     private static Instrument ToInstrument(GateCurrencyPair pair) =>
         new(

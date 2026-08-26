@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="TradingClient.Infrastructure.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\Application\TradingClient.Application.csproj" />
     <ProjectReference Include="..\Exchanges.Common\TradingClient.Exchanges.Common.csproj" />
   </ItemGroup>
