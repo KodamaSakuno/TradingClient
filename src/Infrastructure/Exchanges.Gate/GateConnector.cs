@@ -11,7 +11,7 @@ using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Exchanges.Gate;
 
-public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccountService, IAsyncDisposable
+public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccountService, ISpotTrading, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.gateio.ws";
     public const string DefaultWsUrl = "wss://api.gateio.ws/ws/v4/";
@@ -21,6 +21,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private readonly GateSpotWsClient _wsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly GateCredentials? _credentials;
+    // Gate 现货下单+改单合计限频 10r/s，令牌桶宁保守勿激进（§7）
+    private readonly TokenBucketRateLimiter _spotRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（GateAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
 
@@ -38,12 +40,14 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         Func<IGateWsTransport> wsTransportFactory,
         TimeSpan? wsPingInterval = null,
         GateCredentials? credentials = null,
-        HttpMessageHandler? authInnerHandler = null)
+        HttpMessageHandler? authInnerHandler = null,
+        TokenBucketRateLimiter? spotRateLimiter = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
         _credentials = credentials;
         _authInnerHandler = authInnerHandler;
+        _spotRateLimiter = spotRateLimiter ?? new TokenBucketRateLimiter(capacity: 10, refillPerSecond: 10);
         _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
     }
 
@@ -156,6 +160,62 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     public Task<Result> TransferFundsAsync(TransferRequest req, CancellationToken ct) =>
         throw new NotImplementedException();
 
+    // WS 私有频道（spot.orders）尚未接入，下一步实现
+    public IObservable<SpotOrderUpdate> SpotOrderUpdates => throw new NotImplementedException();
+
+    public async Task<Result<SpotOrder>> PlaceSpotOrderAsync(PlaceSpotOrderRequest req, CancellationToken ct)
+    {
+        if (req.Quantity <= 0)
+            return Result.Failure<SpotOrder>(new ExchangeError("INVALID_QUANTITY", "Quantity must be positive."));
+        if (req is { Type: OrderType.Limit, Price: null })
+            return Result.Failure<SpotOrder>(new ExchangeError("MISSING_PRICE", "Limit order requires a price."));
+        // 决策（§7 数量语义）：领域 Quantity 统一为 base 币数量，而 Gate market buy 的 amount 是 quote 币金额，
+        // 不经行情换算无法映射，本步直接拒单；limit 买卖与 market sell（amount 为 base 数量）正常下单
+        if (req is { Type: OrderType.Market, Side: OrderSide.Buy })
+            return Result.Failure<SpotOrder>(new ExchangeError(
+                "UNSUPPORTED_ORDER",
+                "Gate market buy amount is a quote-currency value; domain Quantity is a base-currency quantity. Conversion requires market data and is not supported yet."));
+        if (_credentials is null)
+            return Result.Failure<SpotOrder>(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        await _spotRateLimiter.WaitAsync(ct);
+
+        // market 单 Gate 只支持 ioc/fok，本步统一 ioc；limit 默认 gtc
+        var body = new GateSpotOrderRequest(
+            GateSymbolFormatter.FormatSpot(RequireSpot(req.Symbol)),
+            req.Type == OrderType.Limit ? "limit" : "market",
+            req.Side == OrderSide.Buy ? "buy" : "sell",
+            req.Quantity.ToString(CultureInfo.InvariantCulture),
+            req.Price?.ToString(CultureInfo.InvariantCulture),
+            req.Type == OrderType.Limit ? "gtc" : "ioc");
+
+        using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
+            "api/v4/spot/orders", body, GateJsonContext.Default.GateSpotOrderRequest, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure<SpotOrder>(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        var order = await response.Content.ReadFromJsonAsync(GateJsonContext.Default.GateSpotOrder, ct);
+        return Result.Success(ToSpotOrder(order!));
+    }
+
+    public async Task<Result> CancelSpotOrderAsync(Symbol symbol, string orderId, CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        await _spotRateLimiter.WaitAsync(ct);
+
+        var pair = GateSymbolFormatter.FormatSpot(RequireSpot(symbol));
+        using var response = await AuthenticatedHttpClient.DeleteAsync(
+            $"api/v4/spot/orders/{Uri.EscapeDataString(orderId)}?currency_pair={pair}", ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        return Result.Success();
+    }
+
     public async ValueTask DisposeAsync()
     {
         _authenticatedHttpClient?.Dispose();
@@ -165,6 +225,38 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private static SpotSymbol RequireSpot(Symbol symbol) =>
         symbol as SpotSymbol
         ?? throw new NotSupportedException($"Gate spot market data does not support symbol type {symbol.GetType().Name}.");
+
+    private static SpotOrder ToSpotOrder(GateSpotOrder dto)
+    {
+        var quantity = decimal.Parse(dto.Amount, CultureInfo.InvariantCulture);
+        var left = decimal.Parse(dto.Left, CultureInfo.InvariantCulture);
+        var filled = quantity - left;
+        var type = dto.Type == "market" ? OrderType.Market : OrderType.Limit;
+
+        // closed 即全部成交；cancelled 无论是否部分成交都归入 Cancelled（部分成交量体现在 FilledQuantity）
+        var status = dto.Status switch
+        {
+            "open" => filled > 0 ? OrderStatus.PartiallyFilled : OrderStatus.New,
+            "closed" => OrderStatus.Filled,
+            "cancelled" => OrderStatus.Cancelled,
+            // Gate 文档状态枚举仅 open/closed/cancelled；出现未知值视为协议漂移（系统故障），不走 Result
+            _ => throw new NotSupportedException($"Unknown Gate spot order status '{dto.Status}'."),
+        };
+
+        return new SpotOrder(
+            dto.Id,
+            GateSymbolFormatter.ParseSpot(dto.CurrencyPair),
+            dto.Side == "buy" ? OrderSide.Buy : OrderSide.Sell,
+            type,
+            // market 单领域语义 Price=null；Gate 对 market 单可能返回 "0"
+            type == OrderType.Market || dto.Price is null
+                ? null
+                : decimal.Parse(dto.Price, CultureInfo.InvariantCulture),
+            quantity,
+            filled,
+            status,
+            DateTimeOffset.FromUnixTimeMilliseconds(dto.CreateTimeMs));
+    }
 
     private static Instrument ToInstrument(GateCurrencyPair pair) =>
         new(

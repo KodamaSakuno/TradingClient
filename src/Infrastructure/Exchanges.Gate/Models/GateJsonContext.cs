@@ -4,6 +4,8 @@ namespace TradingClient.Exchanges.Gate.Models;
 
 [JsonSerializable(typeof(GateCurrencyPair[]))]
 [JsonSerializable(typeof(GateSpotAccount[]))]
+[JsonSerializable(typeof(GateSpotOrderRequest))]
+[JsonSerializable(typeof(GateSpotOrder))]
 [JsonSerializable(typeof(GateApiError))]
 [JsonSerializable(typeof(GateServerTime))]
 [JsonSerializable(typeof(GateWsRequest))]
