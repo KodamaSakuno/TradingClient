@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -15,6 +16,7 @@ using TradingClient.Exchanges.Gate.Auth;
 // 凭证只走环境变量，永不打印 secret，key 只打前 4 位掩码（§9）
 
 const string TestnetBaseUrl = "https://api-testnet.gateapi.io";
+const string TestnetWsUrl = "wss://ws-testnet.gate.com/v4/ws/spot";
 
 static void Log(string step, string message) =>
     Console.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [{step}] {message}");
@@ -57,9 +59,15 @@ var gatePair = $"{symbol.Base}_{symbol.Quote}";
 Log("参数", $"目标交易对 {gatePair}");
 
 var failed = false;
+// WS 代理（可选）：testnet 的 WS 端点在部分网络环境下需要代理，REST 不通时同理（走自供 httpClient）
+var proxyArg = Environment.GetEnvironmentVariable("GATE_TESTNET_PROXY") ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
+var wsProxy = string.IsNullOrWhiteSpace(proxyArg) ? null : new WebProxy(proxyArg);
+if (wsProxy is not null)
+    Log("代理", $"WS 使用代理 {new Uri(proxyArg!).Host}:{new Uri(proxyArg!).Port}");
+
 using var httpClient = new HttpClient();
 await using var connector = new GateConnector(
-    httpClient, TestnetBaseUrl, new GateCredentials(apiKey, apiSecret));
+    httpClient, TestnetBaseUrl, new GateCredentials(apiKey, apiSecret), wsUrl: TestnetWsUrl, wsProxy: wsProxy);
 
 // ---------- 3. 连接（内含 /spot/time 校时，失败降级本地时钟） ----------
 try

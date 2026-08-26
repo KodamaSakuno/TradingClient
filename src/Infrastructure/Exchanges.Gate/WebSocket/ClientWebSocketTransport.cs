@@ -1,10 +1,11 @@
 using System.Buffers;
+using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 
 namespace TradingClient.Exchanges.Gate.WebSocket;
 
-internal sealed class ClientWebSocketTransport : IGateWsTransport
+internal sealed class ClientWebSocketTransport(IWebProxy? proxy = null) : IGateWsTransport
 {
     private ClientWebSocket? _socket;
 
@@ -12,6 +13,8 @@ internal sealed class ClientWebSocketTransport : IGateWsTransport
     {
         Dispose();
         _socket = new ClientWebSocket();
+        if (proxy is not null)
+            _socket.Options.Proxy = proxy;
         await _socket.ConnectAsync(endpoint, ct);
     }
 

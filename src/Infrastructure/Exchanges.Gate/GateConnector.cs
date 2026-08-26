@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using TradingClient.Application.Abstractions;
 using TradingClient.Domain.Instruments;
@@ -28,8 +29,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
 
     private HttpClient? _authenticatedHttpClient;
 
-    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null)
-        : this(httpClient, baseUrl, new Uri(DefaultWsUrl), () => new ClientWebSocketTransport(), credentials: credentials)
+    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null, string? wsUrl = null, IWebProxy? wsProxy = null)
+        : this(httpClient, baseUrl, new Uri(wsUrl ?? DefaultWsUrl), () => new ClientWebSocketTransport(wsProxy), credentials: credentials)
     {
     }
 
