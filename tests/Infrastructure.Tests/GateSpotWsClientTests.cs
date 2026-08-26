@@ -3,6 +3,7 @@ using System.Text.Json;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
 using TradingClient.Exchanges.Gate.Auth;
+using TradingClient.Exchanges.Common;
 using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Infrastructure.Tests;
@@ -377,7 +378,7 @@ public class GateSpotWsClientTests
         public void OnCompleted() { }
     }
 
-    private sealed class FakeWsTransport : IGateWsTransport
+    private sealed class FakeWsTransport : IWsTransport
     {
         private readonly Lock _gate = new();
         private readonly Queue<string?> _inbound = new();

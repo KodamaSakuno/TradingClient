@@ -38,7 +38,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         HttpClient httpClient,
         string baseUrl,
         Uri wsEndpoint,
-        Func<IGateWsTransport> wsTransportFactory,
+        Func<IWsTransport> wsTransportFactory,
         TimeSpan? wsPingInterval = null,
         GateCredentials? credentials = null,
         HttpMessageHandler? authInnerHandler = null,

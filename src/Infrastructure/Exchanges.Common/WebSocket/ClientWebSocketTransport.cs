@@ -3,9 +3,9 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 
-namespace TradingClient.Exchanges.Gate.WebSocket;
+namespace TradingClient.Exchanges.Common;
 
-internal sealed class ClientWebSocketTransport(IWebProxy? proxy = null) : IGateWsTransport
+public sealed class ClientWebSocketTransport(IWebProxy? proxy = null) : IWsTransport
 {
     private ClientWebSocket? _socket;
 

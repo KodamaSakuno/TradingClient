@@ -18,7 +18,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
     internal static readonly TimeSpan s_defaultPingInterval = TimeSpan.FromSeconds(20);
 
     private readonly Uri _endpoint;
-    private readonly Func<IGateWsTransport> _transportFactory;
+    private readonly Func<IWsTransport> _transportFactory;
     private readonly Action<ConnectionState> _reportState;
     private readonly Func<Func<CancellationToken, Task>, CancellationToken, Task> _reconnect;
     private readonly TimeSpan _pingInterval;
@@ -31,14 +31,14 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
 
     private CancellationTokenSource? _sessionCts;
     private Task? _supervisor;
-    private IGateWsTransport? _transport;
+    private IWsTransport? _transport;
     private CancellationTokenSource? _pingCts;
     private bool _connectedOnce;
     private bool _disposed;
 
     public GateSpotWsClient(
         Uri endpoint,
-        Func<IGateWsTransport> transportFactory,
+        Func<IWsTransport> transportFactory,
         Action<ConnectionState> reportState,
         Func<Func<CancellationToken, Task>, CancellationToken, Task> reconnect,
         TimeSpan? pingInterval = null,
@@ -263,7 +263,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
     {
         while (true)
         {
-            IGateWsTransport transport;
+            IWsTransport transport;
             lock (_gate)
                 transport = _transport ?? throw new InvalidOperationException("No active transport.");
 
@@ -326,7 +326,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
         entry?.Updates.OnNext(envelope);
     }
 
-    private void StartPingLoop(IGateWsTransport transport)
+    private void StartPingLoop(IWsTransport transport)
     {
         var pingCts = new CancellationTokenSource();
         lock (_gate)
@@ -353,7 +353,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
 
     private void CleanupSession(CancellationToken sessionToken)
     {
-        IGateWsTransport? transport;
+        IWsTransport? transport;
         CancellationTokenSource? pingCts;
         lock (_gate)
         {
@@ -377,7 +377,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
 
     private void SendSubscribeIfConnected(SubscriptionKey key, SubscriptionEntry entry)
     {
-        IGateWsTransport? transport;
+        IWsTransport? transport;
         lock (_gate)
         {
             // 建连竞态：未连接时交给连接后的重订阅循环；已连接且未订阅时才立即发送
@@ -406,7 +406,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
 
     private void SendIfConnected(string frame)
     {
-        IGateWsTransport? transport;
+        IWsTransport? transport;
         lock (_gate)
             transport = _transport;
 
@@ -415,7 +415,7 @@ internal sealed class GateSpotWsClient : IAsyncDisposable
     }
 
     // 发送失败由接收循环发现断线并重连，重连后统一补发订阅，这里不再重试
-    private async Task SendSafeAsync(IGateWsTransport transport, string frame)
+    private async Task SendSafeAsync(IWsTransport transport, string frame)
     {
         await _sendLock.WaitAsync();
         try

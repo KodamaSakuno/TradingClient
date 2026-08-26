@@ -4,6 +4,7 @@ using TradingClient.Application.Abstractions;
 using TradingClient.Exchanges.ContractTests.Contract;
 using TradingClient.Exchanges.Gate;
 using TradingClient.Exchanges.Gate.Auth;
+using TradingClient.Exchanges.Common;
 using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Exchanges.ContractTests;
@@ -48,7 +49,7 @@ public class GateClassicSpotTradingTests : SpotTradingContractTests
     }
 
     // 收到 spot.orders 订阅帧后回放一条订单通知，模拟下单后的私有推送
-    private sealed class ReplayingWsTransport(string orderNotification) : IGateWsTransport
+    private sealed class ReplayingWsTransport(string orderNotification) : IWsTransport
     {
         private readonly Lock _gate = new();
         private readonly Queue<string?> _inbound = new();
