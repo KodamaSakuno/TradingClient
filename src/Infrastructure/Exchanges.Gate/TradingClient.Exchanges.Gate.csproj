@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TradingClient.Infrastructure.Tests" />
+    <InternalsVisibleTo Include="TradingClient.Exchanges.ContractTests" />
   </ItemGroup>
 
   <ItemGroup>

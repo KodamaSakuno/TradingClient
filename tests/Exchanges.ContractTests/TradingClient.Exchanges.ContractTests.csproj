@@ -8,6 +8,7 @@
   <ItemGroup>
     <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\gate_spot_currency_pairs.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\gate_spot_accounts.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

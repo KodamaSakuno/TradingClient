@@ -11,7 +11,7 @@ using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Exchanges.Gate;
 
-public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDisposable
+public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccountService, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.gateio.ws";
     public const string DefaultWsUrl = "wss://api.gateio.ws/ws/v4/";
@@ -21,6 +21,10 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDi
     private readonly GateSpotWsClient _wsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly GateCredentials? _credentials;
+    // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（GateAuthHandler 默认 HttpClientHandler）
+    private readonly HttpMessageHandler? _authInnerHandler;
+
+    private HttpClient? _authenticatedHttpClient;
 
     public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null)
         : this(httpClient, baseUrl, new Uri(DefaultWsUrl), () => new ClientWebSocketTransport(), credentials: credentials)
@@ -33,11 +37,13 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDi
         Uri wsEndpoint,
         Func<IGateWsTransport> wsTransportFactory,
         TimeSpan? wsPingInterval = null,
-        GateCredentials? credentials = null)
+        GateCredentials? credentials = null,
+        HttpMessageHandler? authInnerHandler = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
         _credentials = credentials;
+        _authInnerHandler = authInnerHandler;
         _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval);
     }
 
@@ -76,17 +82,23 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDi
         }
     }
 
-    // 供后续账户/交易接口使用：公共行情请求不走签名，签名客户端按需单独创建
+    // 供账户/交易接口使用：公共行情请求不走签名，签名客户端按需单独创建并缓存复用
     internal HttpClient CreateAuthenticatedHttpClient()
     {
         if (_credentials is null)
             throw new InvalidOperationException("Gate authenticated endpoints require credentials.");
 
-        return new HttpClient(new GateAuthHandler(_credentials, _timeSync))
+        var handler = new GateAuthHandler(_credentials, _timeSync);
+        if (_authInnerHandler is not null)
+            handler.InnerHandler = _authInnerHandler;
+
+        return new HttpClient(handler)
         {
             BaseAddress = new Uri(_baseUrl + "/"),
         };
     }
+
+    private HttpClient AuthenticatedHttpClient => _authenticatedHttpClient ??= CreateAuthenticatedHttpClient();
 
     public async Task<IReadOnlyList<Instrument>> GetInstrumentsAsync(ProductKind product, CancellationToken ct)
     {
@@ -108,7 +120,47 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAsyncDi
 
     public IObservable<Candle> SubscribeCandles(Symbol symbol, TimeFrame tf) => throw new NotImplementedException();
 
-    public ValueTask DisposeAsync() => _wsClient.DisposeAsync();
+    public async Task<Result<AccountSummary>> GetAccountAsync(CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure<AccountSummary>(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        using var response = await AuthenticatedHttpClient.GetAsync("api/v4/spot/accounts", ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure<AccountSummary>(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        var accounts = await response.Content.ReadFromJsonAsync(GateJsonContext.Default.GateSpotAccountArray, ct)
+            ?? [];
+
+        var assets = accounts.Select(a =>
+        {
+            var available = decimal.Parse(a.Available, CultureInfo.InvariantCulture);
+            var locked = decimal.Parse(a.Locked, CultureInfo.InvariantCulture);
+            var total = available + locked;
+            // EquityValue 未折算：跨币种折算需要行情价格，且本地文档无 /wallet/total_balance，暂以本币总量占位
+            return new AssetBalance(a.Currency, total, locked, CollateralWeight: null, EquityValue: total);
+        }).ToArray();
+
+        // 现货 Classic 无保证金概念，且 TotalEquity 需跨币种折算（同上），权益与保证金字段一律为 0
+        return Result.Success(new AccountSummary(
+            AccountMode.Classic,
+            TotalEquity: 0m,
+            AvailableMargin: 0m,
+            InitialMargin: 0m,
+            MaintenanceMargin: 0m,
+            MarginRatio: 0m,
+            assets));
+    }
+
+    public Task<Result> TransferFundsAsync(TransferRequest req, CancellationToken ct) =>
+        throw new NotImplementedException();
+
+    public async ValueTask DisposeAsync()
+    {
+        _authenticatedHttpClient?.Dispose();
+        await _wsClient.DisposeAsync();
+    }
 
     private static SpotSymbol RequireSpot(Symbol symbol) =>
         symbol as SpotSymbol
