@@ -20,12 +20,13 @@ TradingClient.slnx
 ├── src/
 │   ├── Domain/                    # 核心层，零第三方依赖
 │   │   ├── Instruments/           # Symbol 语义化层级、Instrument（含完整交易规则）
+│   │   ├── Options/               # 期权定价引擎：Black-76 / CRR 二叉树 / BAW / Greeks / IV 反解
 │   │   ├── Trading/               # Order、Position、Balance、各类 Update 事件
 │   │   └── Primitives/            # Result<T>、ExchangeError、AccountMode、Capabilities
 │   ├── Application/               # 用例层，只依赖 Domain
 │   │   ├── Abstractions/          # 按产品线垂直拆分的网关接口（无巨型网关）
 │   │   ├── Risk/                  # 客户端风控：事前规则链 + 事中 RiskMonitor（见下）
-│   │   ├── UseCases/              # Spot / Futures 下单等
+│   │   ├── UseCases/              # Spot / Futures 下单、期权链分析
 │   │   └── Services/              # ExchangeRegistry、InstrumentCache
 │   ├── Infrastructure/
 │   │   ├── Exchanges.Common/      # ExchangeConnectorBase、令牌桶限流、时间同步、WS 传输抽象
@@ -66,7 +67,7 @@ TradingClient.slnx
 
 ## 测试
 
-xUnit v3（Microsoft Testing Platform runner）。当前 **Domain 25 / Application 99 / Infrastructure 283 / Contract 40，全绿**。
+xUnit v3（Microsoft Testing Platform runner）。当前 **Domain 82 / Application 114 / Infrastructure 283 / Contract 40，共 519 个，全绿**。
 
 - Domain / Application / Exchanges.Common：纯单元测试，零外部依赖
 - 交易所适配器：**契约测试**——针对 `ISpotTrading`/`IFuturesTrading` 等接口的抽象测试基类，每个交易所 fixture（桩 HTTP + 回放 WS）跑同一套用例；新增交易所只需新增 fixture
@@ -102,8 +103,8 @@ dotnet run --project tools/BitgetSmokeTest              # Bitget UTA 现货模�
 - [x] Bitget 现货（UTA）+ 契约测试按账户模式参数化
 - [x] Gate 合约深入：持仓、杠杆、双向持仓、私有推送、强平预警
 - [x] 客户端风控两层（事前规则链 + 事中监控 + kill switch）
-- [ ] 下单票面板与订单簿 UI（进行中）
-- [ ] 期权分析模块：Black-76 定价、Greeks、IV 反解、T 型报价（本地，不接交易所）
+- [x] 下单票面板与订单簿 UI
+- [x] 期权分析模块：Black-76 定价、Greeks、IV 反解、T 型报价（本地，不接交易所）
 - [ ] PostgreSQL 交易历史库与复盘查询（EF Core + Migrations）
 - [ ] CI、BenchmarkDotNet 性能基线与调优记录、ADR 补齐
 
