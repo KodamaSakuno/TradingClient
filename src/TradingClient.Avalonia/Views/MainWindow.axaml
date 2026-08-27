@@ -2,11 +2,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TradingClient.Avalonia.ViewModels"
         xmlns:trading="using:TradingClient.Domain.Trading"
+        xmlns:conv="using:TradingClient.Avalonia.Converters"
         x:Class="TradingClient.Avalonia.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TradingClient" Width="720" Height="520">
+        Title="TradingClient" Width="720" Height="960">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
 
     <!-- 交易所 + 产品选择器：条目由 ExchangeRegistry/Capabilities 驱动（§8.2） -->
     <ComboBox Grid.Row="0"
@@ -45,8 +46,73 @@
       <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center" />
     </StackPanel>
 
+    <!-- 合约面板：仅选中「合约」条目且连接器支持 IFuturesTrading 时可见（§8.2 读能力显隐） -->
+    <Border Grid.Row="4" IsVisible="{Binding IsFuturesSelected}"
+            BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+      <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="8">
+
+        <!-- 强平预警 banner：保留最后一条 -->
+        <Border Grid.Row="0" IsVisible="{Binding FuturesPanel.HasLiquidationWarning}"
+                Background="#2B1A00" CornerRadius="4" Padding="8">
+          <TextBlock Text="{Binding FuturesPanel.LiquidationWarningText}"
+                     Foreground="{Binding FuturesPanel.LiquidationWarningBrush}" FontWeight="Bold" />
+        </Border>
+
+        <!-- 杠杆 + 保证金模式 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="杠杆" VerticalAlignment="Center" />
+          <TextBox Text="{Binding FuturesPanel.LeverageText}" Width="64" Watermark="1-125" />
+          <ComboBox ItemsSource="{Binding FuturesPanel.MarginModes}"
+                    SelectedItem="{Binding FuturesPanel.SelectedMarginMode}" MinWidth="100" />
+          <Button Content="应用杠杆" Command="{Binding FuturesPanel.ApplyLeverage}" />
+          <TextBlock Text="{Binding FuturesPanel.LeverageMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
+        </StackPanel>
+
+        <!-- 持仓模式：仅支持双向持仓的交易所可见（Capabilities.SupportsDualPositionMode） -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8"
+                    IsVisible="{Binding FuturesPanel.SupportsDualPositionMode}">
+          <TextBlock Text="{Binding FuturesPanel.PositionModeStatus}" VerticalAlignment="Center" />
+          <Button Content="单向" Command="{Binding FuturesPanel.SetSinglePositionMode}" />
+          <Button Content="双向" Command="{Binding FuturesPanel.SetDualPositionMode}" />
+        </StackPanel>
+
+        <!-- 持仓表头 -->
+        <Grid Grid.Row="3" ColumnDefinitions="140,80,100,120,120,60,100">
+          <TextBlock Grid.Column="0" Text="Symbol" FontWeight="Bold" />
+          <TextBlock Grid.Column="1" Text="Side" FontWeight="Bold" />
+          <TextBlock Grid.Column="2" Text="Quantity" FontWeight="Bold" />
+          <TextBlock Grid.Column="3" Text="EntryPrice" FontWeight="Bold" />
+          <TextBlock Grid.Column="4" Text="UnrealizedPnl" FontWeight="Bold" />
+          <TextBlock Grid.Column="5" Text="Leverage" FontWeight="Bold" />
+          <TextBlock Grid.Column="6" Text="MarginMode" FontWeight="Bold" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="4" MaxHeight="220">
+          <StackPanel>
+            <TextBlock Text="{Binding FuturesPanel.PositionsMessage}" Foreground="DarkOrange" />
+            <ItemsControl ItemsSource="{Binding FuturesPanel.Positions}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="trading:Position">
+                  <Grid ColumnDefinitions="140,80,100,120,120,60,100">
+                    <TextBlock Grid.Column="0" Text="{Binding Symbol.Raw}" />
+                    <TextBlock Grid.Column="1" Text="{Binding Side}" />
+                    <TextBlock Grid.Column="2" Text="{Binding Quantity}" />
+                    <TextBlock Grid.Column="3" Text="{Binding EntryPrice}" />
+                    <TextBlock Grid.Column="4" Text="{Binding UnrealizedPnl}"
+                               Foreground="{Binding UnrealizedPnl, Converter={x:Static conv:PnlBrushConverter.Instance}}" />
+                    <TextBlock Grid.Column="5" Text="{Binding Leverage}" />
+                    <TextBlock Grid.Column="6" Text="{Binding MarginMode}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </Grid>
+    </Border>
+
     <!-- 余额区 -->
-    <Border Grid.Row="4" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="5" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
       <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
         <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" />
 

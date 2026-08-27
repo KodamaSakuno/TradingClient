@@ -6,6 +6,7 @@ using ReactiveUI;
 using Serilog;
 using TradingClient.Application.Abstractions;
 using TradingClient.Application.Services;
+using TradingClient.Avalonia.ViewModels.Futures;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
 
@@ -23,6 +24,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     private readonly ILogger _logger;
     private readonly CompositeDisposable _subscriptions = new();
 
+    // 交易对输入去抖后按产品线解析出的语义化 Symbol（§4.1）；Replay(1) 让后创建的合约面板立即拿到当前符号
+    private readonly IObservable<Symbol?> _parsedSymbol;
+
     public MainWindowViewModel(ExchangeRegistry registry, ILogger logger)
     {
         _logger = logger;
@@ -33,9 +37,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .ToArray();
         _selectedConnector = ConnectorOptions.FirstOrDefault();
 
+        _parsedSymbol = this.WhenAnyValue(vm => vm.SymbolText)
+            .Throttle(SymbolInputDebounce)
+            .CombineLatest(
+                this.WhenAnyValue(vm => vm.SelectedConnector)
+                    .Select(option => option?.Product ?? ProductKind.Spot)
+                    .DistinctUntilChanged(),
+                ParseSymbol)
+            .DistinctUntilChanged()
+            .Replay(1)
+            .RefCount();
+
         WireConnectionStates();
         WireQuoteStream();
         WireConnectorActivation();
+        WireFuturesPanel();
     }
 
     public IReadOnlyList<ConnectorOption> ConnectorOptions { get; }
@@ -45,6 +61,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         get => _selectedConnector;
         set => this.RaiseAndSetIfChanged(ref _selectedConnector, value);
+    }
+
+    // 合约面板跟随选中项生命周期，不进 DI 容器（§8.2）；非合约选中项时为 null
+    private FuturesPanelViewModel? _futuresPanel;
+    public FuturesPanelViewModel? FuturesPanel
+    {
+        get => _futuresPanel;
+        private set => this.RaiseAndSetIfChanged(ref _futuresPanel, value);
+    }
+
+    private bool _isFuturesSelected;
+    public bool IsFuturesSelected
+    {
+        get => _isFuturesSelected;
+        private set => this.RaiseAndSetIfChanged(ref _isFuturesSelected, value);
     }
 
     private string _symbolText = "BTC_USDT";
@@ -178,8 +209,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
-    // 行情管道：Symbol 输入去抖 → 解析为语义化 SpotSymbol（§4.1）→ 换订阅（Switch 自动退订旧流）
+    // 合约面板跟随选中项：选中「合约」且连接器实现 IFuturesTrading 时创建，切换即释放重建
+    // （重建天然完成清空持仓、消息、预警并退订全部流的要求）
+    private void WireFuturesPanel()
+    {
+        this.WhenAnyValue(vm => vm.SelectedConnector)
+            .Subscribe(
+                option =>
+                {
+                    FuturesPanel?.Dispose();
+                    FuturesPanel = option is { Product: ProductKind.Futures } && option.Connector is IFuturesTrading futures
+                        ? new FuturesPanelViewModel(futures, _parsedSymbol, _logger)
+                        : null;
+                    IsFuturesSelected = FuturesPanel is not null;
+                },
+                ex => _logger.Error(ex, "Futures panel stream faulted"))
+            .DisposeWith(_subscriptions);
+    }
+
+    // 行情管道：Symbol 输入去抖 → 按产品线解析为语义化 Symbol（§4.1）→ 换订阅（Switch 自动退订旧流）
     // → Sample 节流 → ViewModel 边界 ObserveOn 切 UI 线程（§8.1）
+    // IMarketData.SubscribeQuotes 签名是 Symbol，适配器按子类型路由到现货/期货频道
     private void WireQuoteStream()
     {
         var marketData = this.WhenAnyValue(vm => vm.SelectedConnector)
@@ -188,12 +238,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .Select(md => md!)
             .DistinctUntilChanged();
 
-        var symbol = this.WhenAnyValue(vm => vm.SymbolText)
-            .Throttle(SymbolInputDebounce)
-            .Select(ParseSpotSymbol)
-            .DistinctUntilChanged();
-
-        marketData.CombineLatest(symbol, (md, s) => (md, s))
+        marketData.CombineLatest(_parsedSymbol, (md, s) => (md, s))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Do(t => SymbolMessage = t.s is null ? "无法解析交易对，格式如 BTC_USDT" : string.Empty)
             .Where(t => t.s is not null)
@@ -212,15 +257,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
-    private static SpotSymbol? ParseSpotSymbol(string text)
+    // 输入格式固定为 Base_Quote 两段：现货 → SpotSymbol，合约 → PerpetualFuturesSymbol
+    private static Symbol? ParseSymbol(string text, ProductKind product)
     {
         var parts = text.Replace('/', '_').Split('_', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length == 2
-            ? new SpotSymbol(parts[0].ToUpperInvariant(), parts[1].ToUpperInvariant())
-            : null;
+        if (parts.Length != 2)
+            return null;
+        var baseAsset = parts[0].ToUpperInvariant();
+        var quoteAsset = parts[1].ToUpperInvariant();
+        return product == ProductKind.Futures
+            ? new PerpetualFuturesSymbol(baseAsset, quoteAsset)
+            : new SpotSymbol(baseAsset, quoteAsset);
     }
 
-    public void Dispose() => _subscriptions.Dispose();
+    public void Dispose()
+    {
+        FuturesPanel?.Dispose();
+        _subscriptions.Dispose();
+    }
 }
 
 /// <summary>
