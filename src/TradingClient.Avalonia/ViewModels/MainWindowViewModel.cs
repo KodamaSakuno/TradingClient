@@ -64,6 +64,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             placeSpotOrder, placeFuturesOrder, spotFacade, futuresFacade,
             this.WhenAnyValue(vm => vm.SelectedConnector), _parsedSymbol, logger);
 
+        // 订单簿梯子（§8.2 Shared）：同样跟随选择器与 Symbol 流，切换由 VM 内部退订重建
+        OrderBook = new OrderBookViewModel(
+            this.WhenAnyValue(vm => vm.SelectedConnector), _parsedSymbol, logger);
+
         WireConnectionStates();
         WireQuoteStream();
         WireConnectorActivation();
@@ -74,6 +78,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public IReadOnlyList<ConnectorOption> ConnectorOptions { get; }
 
     public OrderTicketViewModel OrderTicket { get; }
+
+    public OrderBookViewModel OrderBook { get; }
 
     private ConnectorOption? _selectedConnector;
     public ConnectorOption? SelectedConnector
@@ -357,6 +363,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         FuturesPanel?.Dispose();
         OrderTicket.Dispose();
+        OrderBook.Dispose();
         _subscriptions.Dispose();
     }
 }
