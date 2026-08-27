@@ -34,8 +34,14 @@ public sealed class App : global::Avalonia.Application
             var viewModel = services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
 
-            // ServiceProvider 内含 IAsyncDisposable 连接器（GateConnector/BitgetConnector），退出时必须异步释放
-            desktop.Exit += (_, _) => services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            // ServiceProvider 内含 IAsyncDisposable 连接器（GateConnector/BitgetConnector），退出时必须异步释放。
+            // 库代码无 ConfigureAwait(false)，在 UI 线程直接等会捕获 Avalonia 同步上下文形成死锁（进程残留），
+            // 故经 Task.Run 移出 UI 线程再同步等
+            desktop.Exit += (_, _) =>
+            {
+                (desktop.MainWindow?.DataContext as IDisposable)?.Dispose();
+                Task.Run(() => services.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+            };
         }
 
         base.OnFrameworkInitializationCompleted();
