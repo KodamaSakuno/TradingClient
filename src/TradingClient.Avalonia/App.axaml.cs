@@ -28,6 +28,8 @@ public sealed class App : global::Avalonia.Application
     // Gate testnet 端点（将来改走配置文件 §9）
     private const string TestnetBaseUrl = "https://api-testnet.gateapi.io";
     private const string TestnetWsUrl = "wss://ws-testnet.gate.com/v4/ws/spot";
+    // 期货是独立 testnet WS 端点；不传会落默认生产端点 fx-ws，testnet 凭证鉴权私有频道必被拒
+    private const string TestnetFuturesWsUrl = "wss://ws-testnet.gate.com/v4/ws/futures/usdt";
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -90,6 +92,7 @@ public sealed class App : global::Avalonia.Application
                 credentials,
                 wsUrl: TestnetWsUrl,
                 wsProxy: wsProxy,
+                futuresWsUrl: TestnetFuturesWsUrl,
                 // 死 man's switch（§6.4）：10s 续期是演示值；客户端死亡的交易所侧兜底，
                 // 与 RiskMonitor 的断线主动撤单是两层防线
                 futuresDeadManInterval: TimeSpan.FromSeconds(10));

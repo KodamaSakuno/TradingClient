@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Windows.Input;
@@ -62,7 +63,14 @@ public sealed class FuturesPanelViewModel : ViewModelBase, IDisposable
         // 初始快照 + 增量流共同维护 SourceCache
         _ = LoadPositionsAsync();
         connector.PositionUpdates
-            .Subscribe(u => ApplyPosition(u.Position), ex => logger.Error(ex, "PositionUpdates stream faulted"))
+            .Subscribe(
+                u => ApplyPosition(u.Position),
+                ex =>
+                {
+                    _logger.Error(ex, "PositionUpdates stream faulted");
+                    // 私有流断掉（如鉴权被拒）时面板不能静默空白；错误来自后台线程，切回 UI 线程再写绑定属性
+                    RxApp.MainThreadScheduler.Schedule(() => PositionsMessage = $"持仓推送中断：{ex.Message}");
+                })
             .DisposeWith(_subscriptions);
 
         // 强平预警：保留最后一条（简单做法，不做超时淡出）
