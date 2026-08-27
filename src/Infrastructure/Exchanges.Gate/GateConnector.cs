@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Reactive.Linq;
 using TradingClient.Application.Abstractions;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
@@ -16,21 +18,28 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
 {
     public const string DefaultBaseUrl = "https://api.gateio.ws";
     public const string DefaultWsUrl = "wss://api.gateio.ws/ws/v4/";
+    // 永续合约 WS 实盘端点（usdt settle）；testnet 是 wss://ws-testnet.gate.com/v4/ws/futures/usdt，与现货 testnet 不同路径，由调用方传入
+    public const string DefaultFuturesWsUrl = "wss://fx-ws.gateio.ws/v4/ws/usdt";
 
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly GateSpotWsClient _wsClient;
+    private readonly GateFuturesWsClient _futuresWsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly GateCredentials? _credentials;
     // Gate 现货下单+改单合计限频 10r/s，令牌桶宁保守勿激进（§7）
     private readonly TokenBucketRateLimiter _spotRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（GateAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
+    // 张→币换算（§7）所需的 quanto_multiplier 缓存：合约名（如 BTC_USDT）→ 乘数，拉 contracts 时顺手填充
+    private readonly ConcurrentDictionary<string, decimal> _futuresQuantoMultipliers = new();
+    private readonly SemaphoreSlim _futuresContractsLock = new(1, 1);
 
     private HttpClient? _authenticatedHttpClient;
 
-    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null, string? wsUrl = null, IWebProxy? wsProxy = null)
-        : this(httpClient, baseUrl, new Uri(wsUrl ?? DefaultWsUrl), () => new ClientWebSocketTransport(wsProxy), credentials: credentials)
+    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null, string? wsUrl = null, IWebProxy? wsProxy = null, string? futuresWsUrl = null)
+        : this(httpClient, baseUrl, new Uri(wsUrl ?? DefaultWsUrl), () => new ClientWebSocketTransport(wsProxy), credentials: credentials,
+            futuresWsEndpoint: new Uri(futuresWsUrl ?? DefaultFuturesWsUrl))
     {
     }
 
@@ -42,7 +51,9 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         TimeSpan? wsPingInterval = null,
         GateCredentials? credentials = null,
         HttpMessageHandler? authInnerHandler = null,
-        TokenBucketRateLimiter? spotRateLimiter = null)
+        TokenBucketRateLimiter? spotRateLimiter = null,
+        Uri? futuresWsEndpoint = null,
+        Func<IWsTransport>? futuresWsTransportFactory = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
@@ -50,6 +61,13 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         _authInnerHandler = authInnerHandler;
         _spotRateLimiter = spotRateLimiter ?? new TokenBucketRateLimiter(capacity: 10, refillPerSecond: 10);
         _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval, credentials, _timeSync);
+        _futuresWsClient = new GateFuturesWsClient(
+            futuresWsEndpoint ?? new Uri(DefaultFuturesWsUrl),
+            futuresWsTransportFactory ?? wsTransportFactory,
+            SetConnectionState,
+            ReconnectAsync,
+            GetQuantoMultiplier,
+            wsPingInterval);
     }
 
     public override string ExchangeId => "Gate";
@@ -125,20 +143,76 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     }
 
     // 阶段 3 只接 usdt 结算（fixture 录自 testnet 2026-08-27）；btc/usd1 settle 未接
-    private async Task<IReadOnlyList<Instrument>> GetFuturesInstrumentsAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<Instrument>> GetFuturesInstrumentsAsync(CancellationToken ct) =>
+        (await LoadFuturesContractsAsync(ct)).Select(ToFuturesInstrument).ToArray();
+
+    // 拉全量合约并顺手填充张→币乘数缓存，供期货 WS 推送换算（§7）
+    private async Task<GateFuturesContract[]> LoadFuturesContractsAsync(CancellationToken ct)
     {
         var contracts = await _httpClient.GetFromJsonAsync(
             $"{_baseUrl}/api/v4/futures/usdt/contracts",
-            GateJsonContext.Default.GateFuturesContractArray, ct);
+            GateJsonContext.Default.GateFuturesContractArray, ct) ?? [];
 
-        return contracts?.Select(ToFuturesInstrument).ToArray() ?? [];
+        foreach (var contract in contracts)
+            _futuresQuantoMultipliers[contract.Name] = decimal.Parse(contract.QuantoMultiplier, CultureInfo.InvariantCulture);
+
+        return contracts;
     }
 
-    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => _wsClient.SubscribeQuotes(RequireSpot(symbol));
+    // 期货 WS 订阅要求乘数缓存就绪（WS 层拿不到 Instrument）；首次订阅时缓存为空则先补拉一次 contracts
+    private async Task EnsureFuturesContractsCachedAsync(CancellationToken ct)
+    {
+        if (!_futuresQuantoMultipliers.IsEmpty)
+            return;
 
-    public IObservable<Trade> SubscribeTrades(Symbol symbol) => _wsClient.SubscribeTrades(RequireSpot(symbol));
+        await _futuresContractsLock.WaitAsync(ct);
+        try
+        {
+            if (_futuresQuantoMultipliers.IsEmpty)
+                await LoadFuturesContractsAsync(ct);
+        }
+        finally
+        {
+            _futuresContractsLock.Release();
+        }
+    }
 
-    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => _wsClient.SubscribeOrderBook(RequireSpot(symbol));
+    // 注入期货 WS client 的乘数查询；查不到（未知合约/缓存未就绪）抛 NotSupportedException，由订阅管线当坏消息跳过该帧
+    internal decimal GetQuantoMultiplier(string contractName) =>
+        _futuresQuantoMultipliers.TryGetValue(contractName, out var multiplier)
+            ? multiplier
+            : throw new NotSupportedException(
+                $"Unknown Gate futures contract '{contractName}': quanto multiplier is not cached.");
+
+    public IObservable<Quote> SubscribeQuotes(Symbol symbol) => symbol switch
+    {
+        SpotSymbol spot => _wsClient.SubscribeQuotes(spot),
+        PerpetualFuturesSymbol perp => SubscribeFutures(perp, _futuresWsClient.SubscribeQuotes),
+        _ => throw UnsupportedSymbol(symbol),
+    };
+
+    public IObservable<Trade> SubscribeTrades(Symbol symbol) => symbol switch
+    {
+        SpotSymbol spot => _wsClient.SubscribeTrades(spot),
+        PerpetualFuturesSymbol perp => SubscribeFutures(perp, _futuresWsClient.SubscribeTrades),
+        _ => throw UnsupportedSymbol(symbol),
+    };
+
+    public IObservable<OrderBookDelta> SubscribeOrderBook(Symbol symbol) => symbol switch
+    {
+        SpotSymbol spot => _wsClient.SubscribeOrderBook(spot),
+        PerpetualFuturesSymbol perp => SubscribeFutures(perp, _futuresWsClient.SubscribeOrderBook),
+        _ => throw UnsupportedSymbol(symbol),
+    };
+
+    // 订阅动作发生时先确保乘数缓存就绪，再进入 WS 订阅
+    private IObservable<T> SubscribeFutures<T>(
+        PerpetualFuturesSymbol symbol, Func<PerpetualFuturesSymbol, IObservable<T>> subscribe) =>
+        Observable.FromAsync(EnsureFuturesContractsCachedAsync).SelectMany(_ => subscribe(symbol));
+
+    // 交割合约是另一族端点（本刀不接），OptionSymbol 等其余类型同样不受支持
+    private static NotSupportedException UnsupportedSymbol(Symbol symbol) =>
+        new($"Gate market data does not support symbol type {symbol.GetType().Name}.");
 
     public IObservable<Candle> SubscribeCandles(Symbol symbol, TimeFrame tf) => throw new NotImplementedException();
 
@@ -237,11 +311,13 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     {
         _authenticatedHttpClient?.Dispose();
         await _wsClient.DisposeAsync();
+        await _futuresWsClient.DisposeAsync();
+        _futuresContractsLock.Dispose();
     }
 
     private static SpotSymbol RequireSpot(Symbol symbol) =>
         symbol as SpotSymbol
-        ?? throw new NotSupportedException($"Gate spot market data does not support symbol type {symbol.GetType().Name}.");
+        ?? throw new NotSupportedException($"Gate spot trading does not support symbol type {symbol.GetType().Name}.");
 
     private static SpotOrder ToSpotOrder(GateSpotOrder dto)
     {
