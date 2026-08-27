@@ -10,7 +10,7 @@ namespace TradingClient.Exchanges.ContractTests.Fakes;
 public sealed class FakeExchangeConnector(AccountMode mode)
     : IAccountService, IMarketData, ISpotTrading, IFuturesTrading
 {
-    private readonly Subject<ConnectionState> _connectionStates = new();
+    private readonly BehaviorSubject<ConnectionState> _connectionStates = new(ConnectionState.Disconnected);
     private readonly Subject<SpotOrderUpdate> _spotOrderUpdates = new();
     private readonly Subject<PositionUpdate> _positionUpdates = new();
     private readonly Subject<LiquidationWarning> _liquidationWarnings = new();
@@ -27,6 +27,7 @@ public sealed class FakeExchangeConnector(AccountMode mode)
         Products: [ProductKind.Spot, ProductKind.Futures]);
 
     public IObservable<ConnectionState> ConnectionStates => _connectionStates;
+    public ConnectionState CurrentConnectionState => _connectionStates.Value;
 
     public Task ConnectAsync(CancellationToken ct)
     {

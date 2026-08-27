@@ -1,4 +1,5 @@
 using TradingClient.Application.Abstractions;
+using TradingClient.Application.Risk;
 using TradingClient.Application.Services;
 using TradingClient.Application.Tests.Fakes;
 using TradingClient.Application.UseCases.Spot;
@@ -15,13 +16,16 @@ public class PlaceSpotOrderTests
     private static Instrument Instrument(InstrumentStatus status = InstrumentStatus.Trading) =>
         new(BtcUsdt, TickSize: 0.01m, StepSize: 0.001m, MinQuantity: 0.001m, null, null, status);
 
+    // 默认空规则链：全部放行
     private static (PlaceSpotOrder UseCase, FakeSpotTrading Trading) CreateUseCase(
-        InstrumentStatus status = InstrumentStatus.Trading)
+        InstrumentStatus status = InstrumentStatus.Trading, PreTradeRiskChain? riskChain = null)
     {
         var marketData = new FakeMarketData();
         marketData.SetInstruments(ProductKind.Spot, Instrument(status));
         var trading = new FakeSpotTrading();
-        return (new PlaceSpotOrder(trading, new InstrumentCache(marketData)), trading);
+        return (new PlaceSpotOrder(
+            trading, new InstrumentCache(marketData),
+            riskChain ?? new PreTradeRiskChain([], new FakeRiskAuditSink())), trading);
     }
 
     private static PlaceSpotOrderRequest LimitRequest(decimal price, decimal quantity) =>
@@ -131,5 +135,50 @@ public class PlaceSpotOrderTests
 
         Assert.True(result.IsSuccess);
         Assert.Same(order, result.Value);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RiskRejects_ReturnsFailureWithoutCallingGateway()
+    {
+        var audit = new FakeRiskAuditSink();
+        var chain = new PreTradeRiskChain(
+            [new StubRiskRule("OrderSizeLimit", new RiskRejection("OrderSizeLimit", "ORDER_SIZE_EXCEEDED", "too big"))],
+            audit);
+        var (useCase, trading) = CreateUseCase(riskChain: chain);
+
+        var result = await useCase.ExecuteAsync(LimitRequest(1.23m, 0.5m), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("ORDER_SIZE_EXCEEDED", result.Error!.Code);
+        Assert.Equal(0, trading.PlaceCallCount);
+        Assert.Single(audit.Records);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GatewaySuccess_NotifiesOrderPlacedHooks()
+    {
+        var hook = new StubHookRiskRule();
+        var (useCase, _) = CreateUseCase(
+            riskChain: new PreTradeRiskChain([hook], new FakeRiskAuditSink()));
+
+        var result = await useCase.ExecuteAsync(LimitRequest(1.23m, 0.5m), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, hook.HookCallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GatewayFailure_DoesNotNotifyOrderPlacedHooks()
+    {
+        var hook = new StubHookRiskRule();
+        var (useCase, trading) = CreateUseCase(
+            riskChain: new PreTradeRiskChain([hook], new FakeRiskAuditSink()));
+        trading.NextPlaceResult = Result.Failure<SpotOrder>(
+            new ExchangeError("INSUFFICIENT_BALANCE", "Not enough balance."));
+
+        var result = await useCase.ExecuteAsync(LimitRequest(1.23m, 0.5m), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(0, hook.HookCallCount);
     }
 }

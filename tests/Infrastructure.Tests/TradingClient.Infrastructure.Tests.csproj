@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Common\TradingClient.Exchanges.Common.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Gate\TradingClient.Exchanges.Gate.csproj" />
     <ProjectReference Include="..\..\src\Infrastructure\Exchanges.Bitget\TradingClient.Exchanges.Bitget.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\Persistence\TradingClient.Persistence.csproj" />
   </ItemGroup>
 
 </Project>

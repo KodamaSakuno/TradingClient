@@ -5,14 +5,19 @@ using Avalonia.Markup.Xaml;
 using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using TradingClient.Application.Abstractions;
+using TradingClient.Application.Risk;
+using TradingClient.Application.Risk.Rules;
 using TradingClient.Application.Services;
+using TradingClient.Application.UseCases.Futures;
 using TradingClient.Application.UseCases.Spot;
+using TradingClient.Avalonia.Risk;
 using TradingClient.Avalonia.ViewModels;
 using TradingClient.Avalonia.Views;
 using TradingClient.Exchanges.Bitget;
 using TradingClient.Exchanges.Bitget.Auth;
 using TradingClient.Exchanges.Gate;
 using TradingClient.Exchanges.Gate.Auth;
+using TradingClient.Persistence;
 
 namespace TradingClient.Avalonia;
 
@@ -131,9 +136,46 @@ public sealed class App : global::Avalonia.Application
         });
 
         services.AddSingleton(sp => new InstrumentCache(sp.GetRequiredService<IMarketData>()));
+
+        // 下单前风控链（§6.4）。限额配置存本地 JSON 文件，将来随 §9.1 迁 SQLite/PostgreSQL；
+        // 文件不存在时用内置演示默认值（真实限额应由用户按账户规模配置）。
+        // 组装时加载一次，运行时改配置重启生效
+        services.AddSingleton<IRiskLimitsStore>(
+            new JsonRiskLimitsStore(Path.Combine(AppContext.BaseDirectory, "risk-limits.json")));
+        services.AddSingleton<IRiskAuditSink, SerilogRiskAuditSink>();
+        services.AddSingleton(sp =>
+            sp.GetRequiredService<IRiskLimitsStore>().LoadAsync(CancellationToken.None)
+                .GetAwaiter().GetResult()
+            ?? new RiskLimitsProfile(
+                new RiskRuleConfig(
+                    MaxOrderQuantity: 1m,
+                    MaxDailyQuantity: 10m,
+                    MaxPositionQuantity: 5m,
+                    MaxPriceDeviationRatio: 0.05m,
+                    DuplicatePriceToleranceRatio: 0.001,
+                    DuplicateWindow: TimeSpan.FromSeconds(3)),
+                PerSymbol: new Dictionary<string, RiskRuleConfig>()));
+        services.AddSingleton(sp => new PreTradeRiskChain(
+            [
+                new ConnectionGuardRule(),
+                new OrderSizeLimitRule(sp.GetRequiredService<RiskLimitsProfile>()),
+                new DailyVolumeLimitRule(sp.GetRequiredService<RiskLimitsProfile>(), TimeProvider.System),
+                new PositionLimitRule(sp.GetRequiredService<RiskLimitsProfile>()),
+                new PriceDeviationRule(sp.GetRequiredService<RiskLimitsProfile>()),
+                new DuplicateOrderRule(sp.GetRequiredService<RiskLimitsProfile>(), TimeProvider.System),
+            ],
+            sp.GetRequiredService<IRiskAuditSink>()));
+
         services.AddSingleton(sp => new PlaceSpotOrder(
-            sp.GetRequiredService<ISpotTrading>(), sp.GetRequiredService<InstrumentCache>()));
+            sp.GetRequiredService<ISpotTrading>(),
+            sp.GetRequiredService<InstrumentCache>(),
+            sp.GetRequiredService<PreTradeRiskChain>()));
         services.AddSingleton(sp => new CancelSpotOrder(sp.GetRequiredService<ISpotTrading>()));
+        services.AddSingleton<IFuturesTrading>(sp => sp.GetRequiredService<GateConnector>());
+        services.AddSingleton(sp => new PlaceFuturesOrder(
+            sp.GetRequiredService<IFuturesTrading>(),
+            sp.GetRequiredService<InstrumentCache>(),
+            sp.GetRequiredService<PreTradeRiskChain>()));
 
         services.AddSingleton<MainWindowViewModel>();
 

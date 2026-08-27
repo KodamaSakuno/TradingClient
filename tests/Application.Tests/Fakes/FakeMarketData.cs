@@ -16,6 +16,7 @@ public sealed class FakeMarketData : IMarketData
     public ExchangeCapabilities Capabilities { get; } =
         new(AccountMode.Classic, RequiresInternalTransfers: true, Products: [ProductKind.Spot]);
     public IObservable<ConnectionState> ConnectionStates => Observable.Never<ConnectionState>();
+    public ConnectionState CurrentConnectionState { get; set; } = ConnectionState.Connected;
     public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
 
     // 非零延迟用于并发测试，让多个首次加载调用真正重叠

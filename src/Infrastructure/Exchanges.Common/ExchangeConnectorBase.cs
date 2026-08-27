@@ -17,6 +17,7 @@ public abstract class ExchangeConnectorBase : IExchangeConnector
     public abstract string ExchangeId { get; }
     public abstract ExchangeCapabilities Capabilities { get; }
     public IObservable<ConnectionState> ConnectionStates => _connectionStates;
+    public ConnectionState CurrentConnectionState => _connectionStates.Value;
 
     public abstract Task ConnectAsync(CancellationToken ct);
 

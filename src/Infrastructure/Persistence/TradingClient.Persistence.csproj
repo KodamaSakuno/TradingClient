@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Application\TradingClient.Application.csproj" />
+  </ItemGroup>
+
+</Project>

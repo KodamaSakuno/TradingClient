@@ -15,6 +15,9 @@ public sealed class FakeSpotTrading : ISpotTrading
     public IObservable<SpotOrderUpdate> SpotOrderUpdates => Observable.Never<SpotOrderUpdate>();
     public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
 
+    // 可设置的快照，风控测试用它模拟断线
+    public ConnectionState CurrentConnectionState { get; set; } = ConnectionState.Connected;
+
     public int PlaceCallCount { get; private set; }
     public PlaceSpotOrderRequest? LastPlaceRequest { get; private set; }
     public Result<SpotOrder>? NextPlaceResult { get; set; }

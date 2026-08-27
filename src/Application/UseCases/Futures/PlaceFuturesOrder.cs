@@ -4,19 +4,19 @@ using TradingClient.Application.Services;
 using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
 
-namespace TradingClient.Application.UseCases.Spot;
+namespace TradingClient.Application.UseCases.Futures;
 
 /// <summary>
-/// 现货下单用例：先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
-/// 全部通过后转发给连接器。校验在适配器之外先做一遍，作为面向 UI 的第一道防线。
+/// 合约下单用例：镜像现货——先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
+/// 全部通过后转发给连接器。
 /// </summary>
-public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain)
+public sealed class PlaceFuturesOrder(IFuturesTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain)
 {
-    public async Task<Result<SpotOrder>> ExecuteAsync(PlaceSpotOrderRequest req, CancellationToken ct)
+    public async Task<Result<FuturesOrder>> ExecuteAsync(PlaceFuturesOrderRequest req, CancellationToken ct)
     {
         var instrument = await instruments.GetAsync(req.Symbol, ct);
         if (instrument is null)
-            return Result.Failure<SpotOrder>(new ExchangeError(
+            return Result.Failure<FuturesOrder>(new ExchangeError(
                 "UNKNOWN_INSTRUMENT", $"Unknown instrument: {req.Symbol.Raw}"));
 
         var price = req.Price is { } p ? instrument.AlignPrice(p) : (decimal?)null;
@@ -25,7 +25,7 @@ public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instrum
         // Floor 对齐后可能落到 0 或低于 MinQuantity，由 ValidateOrder 捕获
         var validation = instrument.ValidateOrder(price, quantity);
         if (!validation.IsSuccess)
-            return Result.Failure<SpotOrder>(validation.Error!);
+            return Result.Failure<FuturesOrder>(validation.Error!);
 
         // LatestPrice / CurrentPositionQuantity 暂无快照源，传 null；依赖它们的规则跳过（见 RiskCheckContext）
         var riskContext = new RiskCheckContext(
@@ -33,9 +33,9 @@ public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instrum
             LatestPrice: null, CurrentPositionQuantity: null);
         var riskResult = await riskChain.CheckAsync(riskContext, ct);
         if (!riskResult.IsSuccess)
-            return Result.Failure<SpotOrder>(riskResult.Error!);
+            return Result.Failure<FuturesOrder>(riskResult.Error!);
 
-        var result = await trading.PlaceSpotOrderAsync(req with { Price = price, Quantity = quantity }, ct);
+        var result = await trading.PlaceFuturesOrderAsync(req with { Price = price, Quantity = quantity }, ct);
         if (result.IsSuccess)
             riskChain.NotifyOrderPlaced(riskContext);
         return result;

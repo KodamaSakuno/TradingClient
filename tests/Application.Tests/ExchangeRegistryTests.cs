@@ -15,6 +15,7 @@ public class ExchangeRegistryTests
         public ExchangeCapabilities Capabilities { get; } =
             new(AccountMode.Classic, RequiresInternalTransfers: true, Products: [ProductKind.Spot]);
         public IObservable<ConnectionState> ConnectionStates => Observable.Never<ConnectionState>();
+        public ConnectionState CurrentConnectionState => ConnectionState.Connected;
         public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
     }
 
