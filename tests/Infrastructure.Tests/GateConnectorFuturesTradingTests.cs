@@ -68,7 +68,8 @@ public class GateConnectorFuturesTradingTests
             "unrealised_pnl": "20.01",
             "leverage": "0",
             "cross_leverage_limit": "25",
-            "mode": "single"
+            "mode": "single",
+            "history_pnl": "3.21"
           },
           {
             "contract": "BTC_USDT",
@@ -407,6 +408,8 @@ public class GateConnectorFuturesTradingTests
         Assert.Equal(20.01m, longPosition.UnrealizedPnl);
         Assert.Equal(MarginMode.Cross, longPosition.MarginMode);
         Assert.Equal(25, longPosition.Leverage);
+        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，§6.4 监控基线差分用）
+        Assert.Equal(3.21m, longPosition.RealizedPnl);
 
         // 逐仓（leverage 非 "0"）：杠杆即字段值；size 负 = 空头
         var shortPosition = positions[1];
@@ -415,6 +418,51 @@ public class GateConnectorFuturesTradingTests
         Assert.Equal(MarginMode.Isolated, shortPosition.MarginMode);
         Assert.Equal(10, shortPosition.Leverage);
         Assert.Equal(-1.25m, shortPosition.UnrealizedPnl);
+        // 无 history_pnl 字段时 RealizedPnl 为 null
+        Assert.Null(shortPosition.RealizedPnl);
+    }
+
+    [Fact]
+    public async Task CancelAllFuturesOrdersAsync_SendsDeleteToFuturesOrdersPath()
+    {
+        var connector = CreateConnector(_ => OkJson("{}"), out var captured);
+
+        var result = await connector.CancelAllFuturesOrdersAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var (request, _) = Assert.Single(captured.Requests);
+        Assert.Equal(HttpMethod.Delete, request.Method);
+        Assert.Equal("/api/v4/futures/usdt/orders", request.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task CancelAllFuturesOrdersAsync_WithRejection_ReturnsLabelCodedFailure()
+    {
+        const string errorJson = """{"label":"INTERNAL","message":"server error"}""";
+        var connector = CreateConnector(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(errorJson, Encoding.UTF8, "application/json"),
+        }, out _);
+
+        var result = await connector.CancelAllFuturesOrdersAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("INTERNAL", result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task CancelAllFuturesOrdersAsync_WithoutCredentials_ReturnsMissingCredentialsFailure()
+    {
+        var connector = new GateConnector(
+            new HttpClient(new StubHttpMessageHandler(_ => OkJson(ContractsJson))),
+            GateConnector.DefaultBaseUrl,
+            new Uri(GateConnector.DefaultWsUrl),
+            wsTransportFactory: () => throw new InvalidOperationException());
+
+        var result = await connector.CancelAllFuturesOrdersAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("MISSING_CREDENTIALS", result.Error!.Code);
     }
 
     [Fact]

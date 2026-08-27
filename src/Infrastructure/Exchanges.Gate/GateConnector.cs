@@ -38,12 +38,15 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private readonly SemaphoreSlim _futuresContractsLock = new(1, 1);
     // 持仓模式是账户级状态：本地缓存供下单映射（reduce_only 分支）用；站外改模式（网页/App）会失准
     private PositionMode _positionMode = PositionMode.Single;
+    // 死 man's switch 后台续期（opt-in，见构造函数注释）
+    private readonly CancellationTokenSource? _deadManCts;
+    private readonly Task? _deadManLoop;
 
     private HttpClient? _authenticatedHttpClient;
 
-    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null, string? wsUrl = null, IWebProxy? wsProxy = null, string? futuresWsUrl = null)
+    public GateConnector(HttpClient httpClient, string baseUrl = DefaultBaseUrl, GateCredentials? credentials = null, string? wsUrl = null, IWebProxy? wsProxy = null, string? futuresWsUrl = null, TimeSpan? futuresDeadManInterval = null)
         : this(httpClient, baseUrl, new Uri(wsUrl ?? DefaultWsUrl), () => new ClientWebSocketTransport(wsProxy), credentials: credentials,
-            futuresWsEndpoint: new Uri(futuresWsUrl ?? DefaultFuturesWsUrl))
+            futuresWsEndpoint: new Uri(futuresWsUrl ?? DefaultFuturesWsUrl), futuresDeadManInterval: futuresDeadManInterval)
     {
     }
 
@@ -58,7 +61,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         TokenBucketRateLimiter? spotRateLimiter = null,
         TokenBucketRateLimiter? futuresRateLimiter = null,
         Uri? futuresWsEndpoint = null,
-        Func<IWsTransport>? futuresWsTransportFactory = null)
+        Func<IWsTransport>? futuresWsTransportFactory = null,
+        TimeSpan? futuresDeadManInterval = null)
     {
         _httpClient = httpClient;
         _baseUrl = baseUrl.TrimEnd('/');
@@ -76,6 +80,15 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             wsPingInterval,
             credentials,
             _timeSync);
+
+        // 死 man's switch（§6.4）：客户端死亡时交易所侧自动撤单的兜底，opt-in。
+        // 与 RiskMonitor 的断线撤单是两层：那个靠客户端存活主动撤，这个靠客户端不续期被动触发。
+        // 无凭证时不启动（无鉴权什么都撤不了）
+        if (futuresDeadManInterval is { } deadManInterval && credentials is not null)
+        {
+            _deadManCts = new CancellationTokenSource();
+            _deadManLoop = Task.Run(() => RunDeadManLoopAsync(deadManInterval, _deadManCts.Token));
+        }
     }
 
     public override string ExchangeId => "Gate";
@@ -477,8 +490,72 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         return Result.Success<IReadOnlyList<Position>>(dtos.Select(ToPosition).ToArray());
     }
 
+    // 撤销全部 open 状态期货订单（DELETE /futures/{settle}/orders），§6.4 事中 kill switch 用；不按 side/合约过滤
+    public async Task<Result> CancelAllFuturesOrdersAsync(CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        await _futuresRateLimiter.WaitAsync(ct);
+
+        using var response = await AuthenticatedHttpClient.DeleteAsync("api/v4/futures/usdt/orders", ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        return Result.Success();
+    }
+
+    // 死 man's switch 续期循环：每 interval 布防一次，timeout = interval × 3（文档下限 5 秒）。
+    // 续期失败不处理——网络死掉导致超时撤单正是这个兜底想要的行为；只有连续约 3 个 interval 都失败才会真触发
+    private async Task RunDeadManLoopAsync(TimeSpan interval, CancellationToken ct)
+    {
+        var timeoutSeconds = Math.Max(5, (int)(interval.TotalSeconds * 3));
+        using var timer = new PeriodicTimer(interval);
+        while (!ct.IsCancellationRequested)
+        {
+            await SendDeadManCountdownAsync(timeoutSeconds, ct);
+            try
+            {
+                await timer.WaitForNextTickAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task SendDeadManCountdownAsync(int timeoutSeconds, CancellationToken ct)
+    {
+        try
+        {
+            await _futuresRateLimiter.WaitAsync(ct);
+            using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
+                "api/v4/futures/usdt/countdown_cancel_all",
+                new GateFuturesCountdownCancelAllRequest(timeoutSeconds),
+                GateJsonContext.Default.GateFuturesCountdownCancelAllRequest, ct);
+            // 续期被拒（限频/鉴权漂移等）不重试，等下一拍
+        }
+        catch (Exception)
+        {
+            // 尽力而为：续期失败的语义即交易所侧倒计时到期自动撤单（兜底生效），不升级
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        // 死 man's switch 先停：尽力发一次 timeout=0 关闭交易所侧倒计时，避免客户端正常退出后误撤单；
+        // 必须在释放 _authenticatedHttpClient 之前
+        if (_deadManCts is not null)
+        {
+            await _deadManCts.CancelAsync();
+            try { await (_deadManLoop ?? Task.CompletedTask); }
+            catch (Exception) { /* 循环内异常已吞，这里只为防御 */ }
+            _deadManCts.Dispose();
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await SendDeadManCountdownAsync(timeoutSeconds: 0, timeoutCts.Token);
+        }
         _authenticatedHttpClient?.Dispose();
         await _wsClient.DisposeAsync();
         await _futuresWsClient.DisposeAsync();
@@ -557,7 +634,9 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             decimal.Parse(dto.EntryPrice, CultureInfo.InvariantCulture),
             decimal.Parse(dto.UnrealisedPnl, CultureInfo.InvariantCulture),
             leverage,
-            isCross ? MarginMode.Cross : MarginMode.Isolated);
+            isCross ? MarginMode.Cross : MarginMode.Isolated,
+            // history_pnl 是该合约生命周期累计已实现盈亏（无日切字段），日维度只能基线差分近似（§6.4）
+            dto.HistoryPnl is null ? null : decimal.Parse(dto.HistoryPnl, CultureInfo.InvariantCulture));
     }
 
     private static SpotOrder ToSpotOrder(GateSpotOrder dto)

@@ -280,6 +280,7 @@ public class GateFuturesWsProtocolTests
               "contract": "BTC_USDT",
               "size": 3,
               "entry_price": 40000.5,
+              "history_pnl": -1.5,
               "margin": 49.999,
               "maintenance_rate": 0.005,
               "leverage": 0,
@@ -308,6 +309,8 @@ public class GateFuturesWsProtocolTests
         Assert.Equal(40000.5m, update.Position.EntryPrice);
         // 推送无 unrealised_pnl，置 0
         Assert.Equal(0m, update.Position.UnrealizedPnl);
+        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，§6.4 监控基线差分用）
+        Assert.Equal(-1.5m, update.Position.RealizedPnl);
         Assert.Equal(MarginMode.Cross, update.Position.MarginMode);
         // 全仓（leverage 0）实际杠杆上限取 cross_leverage_limit
         Assert.Equal(10, update.Position.Leverage);

@@ -231,7 +231,9 @@ internal static class GateFuturesWsProtocol
             dto.UnrealisedPnl ?? 0m,
             // leverage 0=全仓（语义同 REST），全仓实际杠杆上限取 cross_leverage_limit
             dto.Leverage != 0 ? (int)dto.Leverage : (int)dto.CrossLeverageLimit,
-            ToMarginMode(dto));
+            ToMarginMode(dto),
+            // history_pnl 是生命周期累计已实现盈亏（无日切字段），供 §6.4 监控做基线差分
+            dto.HistoryPnl);
 
     // single 模式按带符号张数定方向（size=0 无法定方向，用 Both）；dual_* 由 mode 直接给出
     private static PositionSide ToSide(string mode, long size) => mode switch

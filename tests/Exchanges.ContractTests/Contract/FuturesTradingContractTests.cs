@@ -41,6 +41,16 @@ public abstract class FuturesTradingContractTests
     }
 
     [Fact]
+    public async Task CancelAllFuturesOrdersAsync_ReturnsSuccess()
+    {
+        var connector = CreateConnector();
+
+        var result = await connector.CancelAllFuturesOrdersAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
     public async Task PositionUpdates_CarryPositionSide()
     {
         var connector = CreateConnector();

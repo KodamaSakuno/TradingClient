@@ -14,6 +14,9 @@ public interface IFuturesTrading : IExchangeConnector
 
     Task<Result<IReadOnlyList<Position>>> GetPositionsAsync(CancellationToken ct);
 
+    /// <summary>撤销全部 open 状态订单（§6.4 事中 kill switch 用），不按方向/合约过滤。</summary>
+    Task<Result> CancelAllFuturesOrdersAsync(CancellationToken ct);
+
     IObservable<PositionUpdate> PositionUpdates { get; }
 
     IObservable<LiquidationWarning> LiquidationWarnings { get; }

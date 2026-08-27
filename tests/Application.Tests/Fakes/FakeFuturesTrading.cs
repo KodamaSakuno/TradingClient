@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using TradingClient.Application.Abstractions;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
@@ -8,18 +9,30 @@ namespace TradingClient.Application.Tests.Fakes;
 
 public sealed class FakeFuturesTrading : IFuturesTrading
 {
+    private readonly Subject<PositionUpdate> _positionUpdates = new();
+    private readonly Subject<ConnectionState> _connectionStates = new();
+
     public string ExchangeId => "Fake";
     public ExchangeCapabilities Capabilities { get; } =
         new(AccountMode.Classic, RequiresInternalTransfers: true, Products: [ProductKind.Futures]);
-    public IObservable<ConnectionState> ConnectionStates => Observable.Never<ConnectionState>();
+    public IObservable<ConnectionState> ConnectionStates => _connectionStates.AsObservable();
     public ConnectionState CurrentConnectionState { get; set; } = ConnectionState.Connected;
-    public IObservable<PositionUpdate> PositionUpdates => Observable.Never<PositionUpdate>();
+    public IObservable<PositionUpdate> PositionUpdates => _positionUpdates.AsObservable();
     public IObservable<LiquidationWarning> LiquidationWarnings => Observable.Never<LiquidationWarning>();
     public Task ConnectAsync(CancellationToken ct) => Task.CompletedTask;
 
     public int PlaceCallCount { get; private set; }
     public PlaceFuturesOrderRequest? LastPlaceRequest { get; private set; }
     public Result<FuturesOrder>? NextPlaceResult { get; set; }
+
+    public int CancelAllCallCount { get; private set; }
+    public Result? NextCancelAllResult { get; set; }
+
+    // 供 RiskMonitor 测试回放持仓/连接流
+    public void PushPosition(Position position) =>
+        _positionUpdates.OnNext(new PositionUpdate(position, DateTimeOffset.UtcNow));
+
+    public void PushConnectionState(ConnectionState state) => _connectionStates.OnNext(state);
 
     public Task<Result<FuturesOrder>> PlaceFuturesOrderAsync(PlaceFuturesOrderRequest req, CancellationToken ct)
     {
@@ -39,4 +52,10 @@ public sealed class FakeFuturesTrading : IFuturesTrading
 
     public Task<Result<IReadOnlyList<Position>>> GetPositionsAsync(CancellationToken ct) =>
         Task.FromResult(Result.Success<IReadOnlyList<Position>>([]));
+
+    public Task<Result> CancelAllFuturesOrdersAsync(CancellationToken ct)
+    {
+        CancelAllCallCount++;
+        return Task.FromResult(NextCancelAllResult ?? Result.Success());
+    }
 }

@@ -41,4 +41,9 @@ public sealed class FakeRiskAuditSink : IRiskAuditSink
 
     public void RecordStateTransition(RiskStateTransition transition) =>
         Transitions.Add(transition);
+
+    public List<RiskKillSwitchAction> KillSwitchActions { get; } = [];
+
+    public void RecordKillSwitch(RiskKillSwitchAction action) =>
+        KillSwitchActions.Add(action);
 }

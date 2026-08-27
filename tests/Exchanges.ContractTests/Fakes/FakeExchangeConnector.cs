@@ -160,5 +160,10 @@ public sealed class FakeExchangeConnector(AccountMode mode)
         return Task.FromResult(Result.Success<IReadOnlyList<Position>>(_positions.ToArray()));
     }
 
+    public Task<Result> CancelAllFuturesOrdersAsync(CancellationToken ct)
+    {
+        return Task.FromResult(Result.Success());
+    }
+
     private string NewOrderId() => $"FAKE-{Interlocked.Increment(ref _nextOrderId)}";
 }

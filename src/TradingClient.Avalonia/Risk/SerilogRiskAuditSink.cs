@@ -19,4 +19,16 @@ public sealed class SerilogRiskAuditSink(ILogger logger) : IRiskAuditSink
         logger.Warning(
             "Risk state transition: {From} -> {To} Reason={Reason} Timestamp={Timestamp}",
             transition.From, transition.To, transition.Reason, transition.Timestamp);
+
+    public void RecordKillSwitch(RiskKillSwitchAction action)
+    {
+        if (action.Succeeded)
+            logger.Warning(
+                "Risk kill switch executed: Trigger={Trigger} Timestamp={Timestamp}",
+                action.Trigger, action.Timestamp);
+        else
+            logger.Error(
+                "Risk kill switch failed: Trigger={Trigger} ErrorCode={ErrorCode} Timestamp={Timestamp}",
+                action.Trigger, action.ErrorCode, action.Timestamp);
+    }
 }

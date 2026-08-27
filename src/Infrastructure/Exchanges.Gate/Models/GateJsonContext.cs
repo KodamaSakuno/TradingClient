@@ -24,5 +24,6 @@ namespace TradingClient.Exchanges.Gate.Models;
 [JsonSerializable(typeof(GateFuturesOrder))]
 [JsonSerializable(typeof(GateFuturesPosition[]))]
 [JsonSerializable(typeof(GateFuturesPositionUpdate[]))]
+[JsonSerializable(typeof(GateFuturesCountdownCancelAllRequest))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 internal sealed partial class GateJsonContext : JsonSerializerContext;

@@ -10,4 +10,10 @@ public interface IRiskAuditSink
 
     /// <summary>风控状态迁移审计（§6.4：每次状态变更写审计日志）。</summary>
     void RecordStateTransition(RiskStateTransition transition);
+
+    /// <summary>kill switch 动作审计（§6.4）：每次实际执行的撤单动作，含触发源与成败。</summary>
+    void RecordKillSwitch(RiskKillSwitchAction action);
 }
+
+/// <summary>kill switch 撤单动作。Trigger：Locked（进入 Locked 态）/ Disconnect（连接断开）。</summary>
+public sealed record RiskKillSwitchAction(string Trigger, bool Succeeded, string? ErrorCode, DateTimeOffset Timestamp);

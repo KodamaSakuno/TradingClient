@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Serilog;
 using TradingClient.Application.Abstractions;
 using TradingClient.Application.Risk;
+using TradingClient.Application.Risk.Evaluators;
 using TradingClient.Application.Risk.Rules;
 using TradingClient.Application.Services;
 using TradingClient.Application.UseCases.Futures;
@@ -35,6 +36,9 @@ public sealed class App : global::Avalonia.Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var services = ConfigureServices();
+
+            // 事中监控启动：订阅持仓/行情/连接流（§6.4）
+            services.GetRequiredService<RiskMonitor>().Start();
 
             var viewModel = services.GetRequiredService<MainWindowViewModel>();
             desktop.MainWindow = new MainWindow { DataContext = viewModel };
@@ -85,7 +89,10 @@ public sealed class App : global::Avalonia.Application
                 TestnetBaseUrl,
                 credentials,
                 wsUrl: TestnetWsUrl,
-                wsProxy: wsProxy);
+                wsProxy: wsProxy,
+                // 死 man's switch（§6.4）：10s 续期是演示值；客户端死亡的交易所侧兜底，
+                // 与 RiskMonitor 的断线主动撤单是两层防线
+                futuresDeadManInterval: TimeSpan.FromSeconds(10));
         });
 
         // Bitget 凭证三字段缺一即降级为 null，与 Gate 同款
@@ -143,7 +150,7 @@ public sealed class App : global::Avalonia.Application
         services.AddSingleton<IRiskLimitsStore>(
             new JsonRiskLimitsStore(Path.Combine(AppContext.BaseDirectory, "risk-limits.json")));
         services.AddSingleton<IRiskAuditSink, SerilogRiskAuditSink>();
-        // 风控状态机共享单例（§6.4）：事前闸门读它，事中 IRiskMonitor（后续切片）写它
+        // 风控状态机共享单例（§6.4）：事前闸门读它，事中 RiskMonitor 写它
         services.AddSingleton<RiskStateMachine>();
         services.AddSingleton(sp =>
             sp.GetRequiredService<IRiskLimitsStore>().LoadAsync(CancellationToken.None)
@@ -180,6 +187,27 @@ public sealed class App : global::Avalonia.Application
             sp.GetRequiredService<IFuturesTrading>(),
             sp.GetRequiredService<InstrumentCache>(),
             sp.GetRequiredService<PreTradeRiskChain>()));
+
+        // 事中风险监控（§6.4 第二层）：评估器可插拔，阈值读 RiskMonitorConfig
+        services.AddSingleton<IReadOnlyList<IRiskEvaluator>>(sp =>
+        {
+            var monitorConfig = sp.GetRequiredService<RiskLimitsProfile>().MonitorOrDefault;
+            return
+            [
+                new DailyLossCircuitBreaker(monitorConfig),
+                new TotalExposureLimitEvaluator(monitorConfig),
+            ];
+        });
+        // 门面单解析：IFuturesTrading/IMarketData 当前都指向 Gate，监控 Gate 账户；
+        // 多连接器监控的分派设计留待交易所选择器落地后再做
+        services.AddSingleton(sp => new RiskMonitor(
+            sp.GetRequiredService<IFuturesTrading>(),
+            sp.GetRequiredService<IMarketData>(),
+            sp.GetRequiredService<RiskStateMachine>(),
+            sp.GetRequiredService<IReadOnlyList<IRiskEvaluator>>(),
+            sp.GetRequiredService<IRiskAuditSink>(),
+            sp.GetRequiredService<RiskLimitsProfile>().MonitorOrDefault,
+            TimeProvider.System));
 
         services.AddSingleton<MainWindowViewModel>();
 

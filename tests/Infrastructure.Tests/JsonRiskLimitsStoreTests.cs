@@ -26,7 +26,16 @@ public class JsonRiskLimitsStoreTests
                     MaxPriceDeviationRatio: 0.02m,
                     DuplicatePriceToleranceRatio: 0.0005,
                     DuplicateWindow: TimeSpan.FromSeconds(10)),
-            });
+            },
+            Monitor: new RiskMonitorConfig(
+                DailyLossWarning: 50m,
+                DailyLossReduceOnly: 120m,
+                DailyLossLocked: 250m,
+                ExposureWarning: 5_000m,
+                ExposureReduceOnly: 8_000m,
+                KillSwitchOnLocked: true,
+                KillSwitchOnDisconnect: false,
+                DayCutOffset: TimeSpan.FromHours(8)));
 
     [Fact]
     public async Task LoadAsync_MissingFile_ReturnsNull()
@@ -53,6 +62,40 @@ public class JsonRiskLimitsStoreTests
             Assert.NotNull(loaded);
             Assert.Equal(original.Default, loaded.Default);
             Assert.Equal(original.PerSymbol, loaded.PerSymbol);
+            Assert.Equal(original.Monitor, loaded.Monitor);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_LegacyFileWithoutMonitor_FallsBackToDefaultMonitorConfig()
+    {
+        // 旧版 risk-limits.json 无 monitor 字段：Monitor 为 null，MonitorOrDefault 回落内置默认
+        var path = TempFilePath();
+        try
+        {
+            await File.WriteAllTextAsync(path, """
+                {
+                  "default": {
+                    "maxOrderQuantity": 1,
+                    "maxDailyQuantity": 10,
+                    "maxPositionQuantity": 5,
+                    "maxPriceDeviationRatio": 0.05,
+                    "duplicatePriceToleranceRatio": 0.001,
+                    "duplicateWindow": "00:00:03"
+                  },
+                  "perSymbol": {}
+                }
+                """, TestContext.Current.CancellationToken);
+
+            var loaded = await new JsonRiskLimitsStore(path).LoadAsync(CancellationToken.None);
+
+            Assert.NotNull(loaded);
+            Assert.Null(loaded.Monitor);
+            Assert.Equal(RiskMonitorConfig.Default, loaded.MonitorOrDefault);
         }
         finally
         {

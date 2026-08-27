@@ -21,4 +21,7 @@ internal sealed record GateFuturesPositionUpdate(
     // cross / isolated；推送可能缺省，缺失时按 leverage==0 回退全仓
     string? PosMarginMode,
     decimal? UnrealisedPnl,
-    long? TimeMs);
+    // 该合约生命周期累计已实现盈亏（JSON number）；无日切字段，日维度只能做基线差分近似（§6.4）。
+    // 推送里没有 mark_price/unrealised_pnl 的实时口径——这是 RiskMonitor 浮动盈亏只能本地估算的根据
+    decimal? HistoryPnl = null,
+    long? TimeMs = null);
