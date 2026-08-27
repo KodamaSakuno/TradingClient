@@ -2,7 +2,7 @@ namespace TradingClient.Exchanges.Common;
 
 /// <summary>
 /// WS 帧收发抽象：订阅管理与解析逻辑只依赖本接口，
-/// 单测用内存假实现回放录制消息，不起真实 WS 服务器（AGENTS.md §10）
+/// 单测用内存假实现回放录制消息，不依赖真实 WS 服务器。
 /// ConnectAsync 可重复调用（断线重连时重建底层连接）
 /// </summary>
 public interface IWsTransport : IDisposable

@@ -10,7 +10,7 @@
 
   <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="12" RowSpacing="12">
 
-    <!-- 交易所 + 产品选择器：交易所条目由 ExchangeRegistry/Capabilities 驱动（§8.2），「本地 · 期权」为本地模块条目 -->
+    <!-- 交易所 + 产品选择器：交易所条目由 ExchangeRegistry/Capabilities 驱动，「本地 · 期权」为本地模块条目 -->
     <ComboBox Grid.Row="0"
               ItemsSource="{Binding SelectorOptions}"
               SelectedItem="{Binding SelectedOption}"
@@ -43,7 +43,7 @@
       </Grid>
     </Border>
 
-    <!-- 订单簿梯子（§8.2 Shared）：asks 降序展示（顶部最远档、底部贴近价差行），bids 顶部为最优买价 -->
+    <!-- 订单簿梯子（现货/合约共用）：asks 降序展示（顶部最远档、底部贴近价差行），bids 顶部为最优买价 -->
     <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
             IsVisible="{Binding IsExchangeSelected}">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="4">
@@ -77,12 +77,12 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
 
-        <!-- 性能读数（§9.2 埋点的 UI 侧展示） -->
+        <!-- 性能读数（行情链路埋点的 UI 侧展示） -->
         <TextBlock Grid.Row="4" Text="{Binding OrderBook.PerfText}" FontSize="11" Foreground="Gray" />
       </Grid>
     </Border>
 
-    <!-- 连接状态 + 风控状态（§6.4：事前/事中咬合点的可视化） -->
+    <!-- 连接状态 + 风控状态（事前/事中咬合点的可视化） -->
     <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
       <TextBlock Text="连接状态" VerticalAlignment="Center" />
       <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center" />
@@ -97,7 +97,7 @@
       <TextBlock Text="{Binding RiskBannerText}" Foreground="Red" FontWeight="Bold" TextWrapping="Wrap" />
     </Border>
 
-    <!-- 下单票：现货/合约共用（§8.2 Shared），按选中项产品线分派用例 -->
+    <!-- 下单票：现货/合约共用，按选中项产品线分派用例 -->
     <Border Grid.Row="6" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
             IsVisible="{Binding IsExchangeSelected}">
       <StackPanel Spacing="8">
@@ -119,7 +119,7 @@
       </StackPanel>
     </Border>
 
-    <!-- 合约面板：仅选中「合约」条目且连接器支持 IFuturesTrading 时可见（§8.2 读能力显隐） -->
+    <!-- 合约面板：仅选中「合约」条目且连接器支持 IFuturesTrading 时可见（按能力显隐） -->
     <Border Grid.Row="7" IsVisible="{Binding IsFuturesSelected}"
             BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="8">
@@ -212,7 +212,7 @@
       </Grid>
     </Border>
 
-    <!-- 期权实验室（§12 本地分析模块）：仅选中「本地 · 期权」时可见。
+    <!-- 期权实验室（本地分析模块）：仅选中「本地 · 期权」时可见。
          微笑曲线用 Polyline 手绘而不引 LiveCharts2/ScottPlot：单条曲线不值一个包；
          坐标轴留白、不画全刻度——演示形态，曲面拟合与坐标轴刻度同属增强项 -->
     <Border Grid.Row="9" IsVisible="{Binding IsOptionsLabSelected}"

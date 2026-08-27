@@ -8,7 +8,7 @@ using TradingClient.Exchanges.Gate;
 
 namespace TradingClient.Infrastructure.Tests;
 
-// GateConnector 的现货/期货 WS 路由与张→币乘数缓存（§7）接线测试
+// GateConnector 的现货/期货 WS 路由与张→币乘数缓存接线测试
 public class GateConnectorFuturesMarketDataTests
 {
     private static readonly SpotSymbol BtcUsdtSpot = new("BTC", "USDT");
@@ -96,7 +96,7 @@ public class GateConnectorFuturesMarketDataTests
         await WaitForAsync(() => collector.Items.Count == 1, "trade");
         var trade = collector.Items[0];
         Assert.Equal(BtcUsdtPerp, trade.Symbol);
-        // 负 size=主动卖；|108 张| × 0.0001 = 0.0108 币（§7：领域类型不出现张）
+        // 负 size=主动卖；|108 张| × 0.0001 = 0.0108 币（领域类型不出现张）
         Assert.Equal(OrderSide.Sell, trade.Side);
         Assert.Equal(0.0108m, trade.Quantity);
     }

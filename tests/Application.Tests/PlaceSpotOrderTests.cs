@@ -189,7 +189,7 @@ public class PlaceSpotOrderTests
     [Fact]
     public async Task ExecuteAsync_SnapshotPriceDeviates_RealRuleRejectsBeforeGateway()
     {
-        // 真规则端到端：快照最新价 1.00，限价 1.23 偏离 23% > 阈值 5%（§6.4 价格偏离保护）
+        // 真规则端到端：快照最新价 1.00，限价 1.23 偏离 23% > 阈值 5%（价格偏离保护）
         var snapshots = new FakeRiskSnapshotSource();
         snapshots.SetLatestPrice(BtcUsdt, 1.00m);
         var audit = new FakeRiskAuditSink();

@@ -3,7 +3,7 @@ using TradingClient.Domain.Primitives;
 namespace TradingClient.Application.Risk;
 
 /// <summary>
-/// 下单前风控链（§6.4）：规则列表注入、逐条执行、首个拒单短路——新增规则不改调用方。
+/// 下单前风控链：规则列表注入、逐条执行、首个拒单短路——新增规则不改调用方。
 /// 拒单先写审计再返回失败。
 /// </summary>
 public sealed class PreTradeRiskChain(IReadOnlyList<IPreTradeRiskCheck> rules, IRiskAuditSink audit)

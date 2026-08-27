@@ -3,7 +3,7 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.Risk.Rules;
 
 /// <summary>
-/// 重复下单防护（§6.4）：同一 Symbol+Side、价格差在容差比例内、时间落在窗口内的重复提交拒。
+/// 重复下单防护：同一 Symbol+Side、价格差在容差比例内、时间落在窗口内的重复提交拒。
 /// 通过检查即记录本次提交；窗口外的记录自动过期。
 /// </summary>
 public sealed class DuplicateOrderRule(RiskLimitsProfile profile, TimeProvider clock) : IPreTradeRiskCheck

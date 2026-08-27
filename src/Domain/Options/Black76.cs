@@ -3,7 +3,7 @@ using TradingClient.Domain.Instruments;
 namespace TradingClient.Domain.Options;
 
 /// <summary>
-/// Black-76 期货期权欧式定价。国内商品期权为美式行权，Black-76 给出的是欧式下界（AGENTS.md §12）；
+/// Black-76 期货期权欧式定价。美式期权存在提前行权溢价，Black-76 给出的是欧式下界；
 /// 美式定价由 <see cref="BinomialTree"/>（基准）与 <see cref="BawApproximation"/>（快速近似）负责，
 /// "美式价 − 欧式价 = 提前行权溢价" 由上层对照展示。
 /// </summary>

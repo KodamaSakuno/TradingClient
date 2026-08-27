@@ -9,7 +9,7 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        // Serilog 最小配置（§2）：本步只接 console sink，结构化落盘后续接入
+        // Serilog 最小配置：本步只接 console sink，结构化落盘后续接入
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .WriteTo.Console()

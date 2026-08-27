@@ -154,7 +154,7 @@ public class GateFuturesWsProtocolTests
         Assert.Equal("27753479", trade.TradeId);
         Assert.Equal(BtcUsdtPerp, trade.Symbol);
         Assert.Equal(96.4m, trade.Price);
-        // 负 size = 主动卖；|108 张| × 0.0001 = 0.0108 币（§7：领域类型不出现张）
+        // 负 size = 主动卖；|108 张| × 0.0001 = 0.0108 币（领域类型不出现张）
         Assert.Equal(OrderSide.Sell, trade.Side);
         Assert.Equal(0.0108m, trade.Quantity);
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1545136464123), trade.Timestamp);
@@ -304,12 +304,12 @@ public class GateFuturesWsProtocolTests
 
         Assert.Equal(BtcUsdtPerp, update.Position.Symbol);
         Assert.Equal(PositionSide.Long, update.Position.Side);
-        // 3 张 × 0.0001 = 0.0003 币（§7：领域类型不出现张）
+        // 3 张 × 0.0001 = 0.0003 币（领域类型不出现张）
         Assert.Equal(0.0003m, update.Position.Quantity);
         Assert.Equal(40000.5m, update.Position.EntryPrice);
         // 推送无 unrealised_pnl，置 0
         Assert.Equal(0m, update.Position.UnrealizedPnl);
-        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，§6.4 监控基线差分用）
+        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，监控基线差分用）
         Assert.Equal(-1.5m, update.Position.RealizedPnl);
         Assert.Equal(MarginMode.Cross, update.Position.MarginMode);
         // 全仓（leverage 0）实际杠杆上限取 cross_leverage_limit

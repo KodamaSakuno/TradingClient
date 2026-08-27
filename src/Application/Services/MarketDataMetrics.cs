@@ -3,7 +3,7 @@ using System.Diagnostics.Metrics;
 namespace TradingClient.Application.Services;
 
 /// <summary>
-/// 行情链路性能埋点（§9.2）：delta 计数、单笔 Apply 耗时、端到端延迟。
+/// 行情链路性能埋点：delta 计数、单笔 Apply 耗时、端到端延迟。
 /// System.Diagnostics.Metrics 为运行时内置，无新增包；静态持有 Meter，进程级单例。
 /// 端到端延迟口径：交易所 delta.Timestamp 与本地时钟存在未校正的偏移（时间偏移维护在适配器 Auth 层，
 /// 不外传），该值含时钟偏移，仅供趋势观察，不作为精确延迟。

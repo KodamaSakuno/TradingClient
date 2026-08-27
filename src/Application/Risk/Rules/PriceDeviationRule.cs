@@ -3,8 +3,8 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.Risk.Rules;
 
 /// <summary>
-/// 价格偏离保护（§6.4）：仅限价单且 LatestPrice 非 null 时检查，偏离比例超阈值拒。
-/// §6.4 的"要求二次确认"是 UI 概念，规则层只做拒绝。
+/// 价格偏离保护：仅限价单且 LatestPrice 非 null 时检查，偏离比例超阈值拒。
+/// "要求二次确认"是 UI 概念，规则层只做拒绝。
 /// </summary>
 public sealed class PriceDeviationRule(RiskLimitsProfile profile) : IPreTradeRiskCheck
 {

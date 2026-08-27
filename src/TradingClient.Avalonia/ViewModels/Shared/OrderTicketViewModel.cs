@@ -13,11 +13,11 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Avalonia.ViewModels.Shared;
 
 /// <summary>
-/// 下单票（§8.2 Shared：现货/合约共用）。MainWindowViewModel 持有单个实例，
+/// 下单票（现货/合约共用）。MainWindowViewModel 持有单个实例，
 /// 目标 Symbol / 连接器跟随顶部选择器与交易对输入，按选中项的产品线分派用例。
 /// 多连接器分派欠账（与 App.axaml.cs 的门面注释同源）：用例实例由 DI 绑定到 Gate，
 /// 选中连接器不是对应门面实例时提示未接入、不发单，避免把单下错交易所。
-/// VM 只做最薄校验（数字可解析、数量 > 0），tick/step 对齐与精度校验在用例层（§4.2）。
+/// VM 只做最薄校验（数字可解析、数量 > 0），tick/step 对齐与精度校验在用例层。
 /// </summary>
 public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
 {
@@ -69,7 +69,7 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
 
     public IReadOnlyList<OrderSide> Sides { get; } = [OrderSide.Buy, OrderSide.Sell];
     public IReadOnlyList<OrderType> OrderTypes { get; } = [OrderType.Limit, OrderType.Market];
-    // 合约单带 PositionSide（§6.4 的 ReduceOnly 推算依赖持仓快照，不依赖这里的显式标志）
+    // 合约单带 PositionSide（ReduceOnly 推算依赖持仓快照，不依赖这里的显式标志）
     public IReadOnlyList<PositionSide> PositionSides { get; } = [PositionSide.Long, PositionSide.Short];
 
     private OrderSide _selectedSide = OrderSide.Buy;

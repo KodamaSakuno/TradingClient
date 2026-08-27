@@ -26,7 +26,7 @@ namespace TradingClient.Avalonia;
 // 基类全限定：本程序集内 using TradingClient.Application.* 会让 Application 解析到命名空间
 public sealed class App : global::Avalonia.Application
 {
-    // Gate testnet 端点（将来改走配置文件 §9）
+    // Gate testnet 端点（将来改走配置文件）
     private const string TestnetBaseUrl = "https://api-testnet.gateapi.io";
     private const string TestnetWsUrl = "wss://ws-testnet.gate.com/v4/ws/spot";
     // 期货是独立 testnet WS 端点；不传会落默认生产端点 fx-ws，testnet 凭证鉴权私有频道必被拒
@@ -40,7 +40,7 @@ public sealed class App : global::Avalonia.Application
         {
             var services = ConfigureServices();
 
-            // 事中监控启动：订阅持仓/行情/连接流（§6.4）
+            // 事中监控启动：订阅持仓/行情/连接流
             services.GetRequiredService<RiskMonitor>().Start();
 
             var viewModel = services.GetRequiredService<MainWindowViewModel>();
@@ -59,7 +59,7 @@ public sealed class App : global::Avalonia.Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    // Composition Root（§8.4）：全部对象图在此组装，ViewModel 不得直接 new 连接器
+    // Composition Root：全部对象图在此组装，ViewModel 不得直接 new 连接器
     private static ServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
@@ -67,7 +67,7 @@ public sealed class App : global::Avalonia.Application
         services.AddSingleton<ILogger>(Log.Logger);
         services.AddSingleton(new HttpClient());
 
-        // 凭证只走环境变量（§9），缺失时为 null：连接器照常启动，鉴权接口返回 MISSING_CREDENTIALS
+        // 凭证只走环境变量，缺失时为 null：连接器照常启动，鉴权接口返回 MISSING_CREDENTIALS
         // 不进 DI 容器：AddSingleton<T> 的 class 约束不接受可空引用类型，凭证也只需在组装连接器时读一次
         var apiKey = Environment.GetEnvironmentVariable("GATE_TESTNET_API_KEY");
         var apiSecret = Environment.GetEnvironmentVariable("GATE_TESTNET_API_SECRET");
@@ -94,7 +94,7 @@ public sealed class App : global::Avalonia.Application
                 wsUrl: TestnetWsUrl,
                 wsProxy: wsProxy,
                 futuresWsUrl: TestnetFuturesWsUrl,
-                // 死 man's switch（§6.4）：10s 续期是演示值；客户端死亡的交易所侧兜底，
+                // 死 man's switch：10s 续期是演示值；客户端死亡的交易所侧兜底，
                 // 与 RiskMonitor 的断线主动撤单是两层防线
                 futuresDeadManInterval: TimeSpan.FromSeconds(10));
         });
@@ -130,7 +130,7 @@ public sealed class App : global::Avalonia.Application
                 httpProxy: proxy);
         });
 
-        // 同一连接器实例按能力面向不同抽象注册（§5.1）
+        // 同一连接器实例按能力面向不同抽象注册
         // 注意：MS DI 单服务解析取最后注册项——共享抽象（IMarketData 等）仍指向 Gate，
         // 供 PlaceSpotOrder 等现有用例使用；多连接器的按选择器分派等下单 UI 接入时再设计
         services.AddSingleton<IExchangeConnector>(sp => sp.GetRequiredService<GateConnector>());
@@ -148,13 +148,13 @@ public sealed class App : global::Avalonia.Application
 
         services.AddSingleton(sp => new InstrumentCache(sp.GetRequiredService<IMarketData>()));
 
-        // 下单前风控链（§6.4）。限额配置存本地 JSON 文件，将来随 §9.1 迁 SQLite/PostgreSQL；
+        // 下单前风控链。限额配置存本地 JSON 文件，将来随持久化层迁 SQLite/PostgreSQL；
         // 文件不存在时用内置演示默认值（真实限额应由用户按账户规模配置）。
         // 组装时加载一次，运行时改配置重启生效
         services.AddSingleton<IRiskLimitsStore>(
             new JsonRiskLimitsStore(Path.Combine(AppContext.BaseDirectory, "risk-limits.json")));
         services.AddSingleton<IRiskAuditSink, SerilogRiskAuditSink>();
-        // 风控状态机共享单例（§6.4）：事前闸门读它，事中 RiskMonitor 写它
+        // 风控状态机共享单例：事前闸门读它，事中 RiskMonitor 写它
         services.AddSingleton<RiskStateMachine>();
         services.AddSingleton(sp =>
             sp.GetRequiredService<IRiskLimitsStore>().LoadAsync(CancellationToken.None)
@@ -194,7 +194,7 @@ public sealed class App : global::Avalonia.Application
             sp.GetRequiredService<PreTradeRiskChain>(),
             sp.GetRequiredService<IRiskSnapshotSource>()));
 
-        // 事中风险监控（§6.4 第二层）：评估器可插拔，阈值读 RiskMonitorConfig
+        // 事中风险监控（第二层）：评估器可插拔，阈值读 RiskMonitorConfig
         services.AddSingleton<IReadOnlyList<IRiskEvaluator>>(sp =>
         {
             var monitorConfig = sp.GetRequiredService<RiskLimitsProfile>().MonitorOrDefault;
@@ -214,12 +214,12 @@ public sealed class App : global::Avalonia.Application
             sp.GetRequiredService<IRiskAuditSink>(),
             sp.GetRequiredService<RiskLimitsProfile>().MonitorOrDefault,
             TimeProvider.System));
-        // RiskMonitor 同时是事前链的快照源（§6.4）：其持仓/最新价表供下单用例组装 RiskCheckContext。
+        // RiskMonitor 同时是事前链的快照源：其持仓/最新价表供下单用例组装 RiskCheckContext。
         // 快照按 Symbol.Raw 精确匹配，现货 Symbol 不在监控表内 → 恒 null、规则跳过，天然正确；
         // 多连接器监控分派（含快照源按交易所路由）与门面分派欠账一起留待后续
         services.AddSingleton<IRiskSnapshotSource>(sp => sp.GetRequiredService<RiskMonitor>());
 
-        // 期权实验室（§12 本地分析模块）：纯计算服务，OptionsLabViewModel 由 MainWindowViewModel 跟随选择器创建
+        // 期权实验室（本地分析模块）：纯计算服务，OptionsLabViewModel 由 MainWindowViewModel 跟随选择器创建
         services.AddSingleton<OptionChainAnalytics>();
 
         services.AddSingleton<MainWindowViewModel>();

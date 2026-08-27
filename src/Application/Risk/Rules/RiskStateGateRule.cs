@@ -4,7 +4,7 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.Risk.Rules;
 
 /// <summary>
-/// 风控状态闸门（§6.4）：读共享 RiskStateMachine，在链里排最前（状态级检查最便宜）。
+/// 风控状态闸门：读共享 RiskStateMachine，在链里排最前（状态级检查最便宜）。
 /// Normal / Warning 放行——Warning 只告警不拦，告警由状态迁移广播负责。
 /// Locked 全拒；ReduceOnly 仅放行减仓单，减仓判定靠 CurrentPositionQuantity 的带符号视角
 /// （正=多、负=空；Buy 加多/减空，Sell 反之），方向相反且 |订单量| ≤ |持仓量| 才算减仓。

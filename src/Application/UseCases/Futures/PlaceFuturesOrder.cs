@@ -7,7 +7,7 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.UseCases.Futures;
 
 /// <summary>
-/// 合约下单用例：镜像现货——先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
+/// 合约下单用例：镜像现货——先基于 Instrument 对齐并校验，再过下单前风控链，
 /// 全部通过后转发给连接器。
 /// </summary>
 public sealed class PlaceFuturesOrder(IFuturesTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain, IRiskSnapshotSource snapshots)

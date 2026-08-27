@@ -7,7 +7,7 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.UseCases.Spot;
 
 /// <summary>
-/// 现货下单用例：先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
+/// 现货下单用例：先基于 Instrument 对齐并校验，再过下单前风控链，
 /// 全部通过后转发给连接器。校验在适配器之外先做一遍，作为面向 UI 的第一道防线。
 /// </summary>
 public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain, IRiskSnapshotSource snapshots)

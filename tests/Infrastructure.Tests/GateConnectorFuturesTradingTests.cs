@@ -127,7 +127,7 @@ public class GateConnectorFuturesTradingTests
         Assert.Equal(OrderSide.Buy, order.Side);
         Assert.Equal(OrderType.Limit, order.Type);
         Assert.Equal(79_000m, order.Price);
-        // 100 张 × 0.0001 = 0.01 币（§7 数量语义）
+        // 100 张 × 0.0001 = 0.01 币（数量语义）
         Assert.Equal(0.01m, order.Quantity);
         Assert.Equal(0m, order.FilledQuantity);
         Assert.Equal(OrderStatus.New, order.Status);
@@ -408,7 +408,7 @@ public class GateConnectorFuturesTradingTests
         Assert.Equal(20.01m, longPosition.UnrealizedPnl);
         Assert.Equal(MarginMode.Cross, longPosition.MarginMode);
         Assert.Equal(25, longPosition.Leverage);
-        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，§6.4 监控基线差分用）
+        // history_pnl → RealizedPnl（生命周期累计已实现盈亏，监控基线差分用）
         Assert.Equal(3.21m, longPosition.RealizedPnl);
 
         // 逐仓（leverage 非 "0"）：杠杆即字段值；size 负 = 空头

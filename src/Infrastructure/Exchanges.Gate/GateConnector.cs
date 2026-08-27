@@ -27,13 +27,13 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private readonly GateFuturesWsClient _futuresWsClient;
     private readonly ServerTimeSync _timeSync = new();
     private readonly GateCredentials? _credentials;
-    // Gate 现货下单+改单合计限频 10r/s，令牌桶宁保守勿激进（§7）
+    // Gate 现货下单+改单合计限频 10r/s，令牌桶宁保守勿激进
     private readonly TokenBucketRateLimiter _spotRateLimiter;
     // Gate 期货下单+改单合计限频 100r/s/UID（撤单 200r/s，保守共用 100r/s 桶）
     private readonly TokenBucketRateLimiter _futuresRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（GateAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
-    // 张→币换算（§7）所需的 quanto_multiplier 缓存：合约名（如 BTC_USDT）→ 乘数，拉 contracts 时顺手填充
+    // 张→币换算所需的 quanto_multiplier 缓存：合约名（如 BTC_USDT）→ 乘数，拉 contracts 时顺手填充
     private readonly ConcurrentDictionary<string, decimal> _futuresQuantoMultipliers = new();
     private readonly SemaphoreSlim _futuresContractsLock = new(1, 1);
     // 持仓模式是账户级状态：本地缓存供下单映射（reduce_only 分支）用；站外改模式（网页/App）会失准
@@ -81,7 +81,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             credentials,
             _timeSync);
 
-        // 死 man's switch（§6.4）：客户端死亡时交易所侧自动撤单的兜底，opt-in。
+        // 死 man's switch：客户端死亡时交易所侧自动撤单的兜底，opt-in。
         // 与 RiskMonitor 的断线撤单是两层：那个靠客户端存活主动撤，这个靠客户端不续期被动触发。
         // 无凭证时不启动（无鉴权什么都撤不了）
         if (futuresDeadManInterval is { } deadManInterval && credentials is not null)
@@ -168,7 +168,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private async Task<IReadOnlyList<Instrument>> GetFuturesInstrumentsAsync(CancellationToken ct) =>
         (await LoadFuturesContractsAsync(ct)).Select(ToFuturesInstrument).ToArray();
 
-    // 拉全量合约并顺手填充张→币乘数缓存，供期货 WS 推送换算（§7）
+    // 拉全量合约并顺手填充张→币乘数缓存，供期货 WS 推送换算
     private async Task<GateFuturesContract[]> LoadFuturesContractsAsync(CancellationToken ct)
     {
         var contracts = await _httpClient.GetFromJsonAsync(
@@ -282,7 +282,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             return Result.Failure<SpotOrder>(new ExchangeError("INVALID_QUANTITY", "Quantity must be positive."));
         if (req is { Type: OrderType.Limit, Price: null })
             return Result.Failure<SpotOrder>(new ExchangeError("MISSING_PRICE", "Limit order requires a price."));
-        // 决策（§7 数量语义）：领域 Quantity 统一为 base 币数量，而 Gate market buy 的 amount 是 quote 币金额，
+        // 决策（数量语义）：领域 Quantity 统一为 base 币数量，而 Gate market buy 的 amount 是 quote 币金额，
         // 不经行情换算无法映射，本步直接拒单；limit 买卖与 market sell（amount 为 base 数量）正常下单
         if (req is { Type: OrderType.Market, Side: OrderSide.Buy })
             return Result.Failure<SpotOrder>(new ExchangeError(
@@ -355,7 +355,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         await EnsureFuturesContractsCachedAsync(ct);
         var multiplier = GetQuantoMultiplier(contract);
 
-        // 币→张换算（§7 数量语义）：本层是兜底校验，用例层已按 StepSize=1张×multiplier 对齐（§4.2）。
+        // 币→张换算（数量语义）：本层是兜底校验，用例层已按 StepSize=1张×multiplier 对齐。
         // enable_decimal=false 张数为整数；不整除与张数超 long 范围同属 INVALID_QUANTITY
         var contractsDecimal = req.Quantity / multiplier;
         if (contractsDecimal != decimal.Truncate(contractsDecimal) || contractsDecimal > long.MaxValue)
@@ -403,7 +403,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             req.Type == OrderType.Limit ? req.Price!.Value.ToString(CultureInfo.InvariantCulture) : "0",
             req.Type == OrderType.Limit ? "gtc" : "ioc",
             reduceOnly,
-            // 自成交防护（§6.4）：Gate 侧 stp_act 取值 cn/co/cb，仅在请求显式携带时下发
+            // 自成交防护：Gate 侧 stp_act 取值 cn/co/cb，仅在请求显式携带时下发
             req.Stp switch
             {
                 SelfTradePrevention.CancelNewest => "cn",
@@ -490,7 +490,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         return Result.Success<IReadOnlyList<Position>>(dtos.Select(ToPosition).ToArray());
     }
 
-    // 撤销全部 open 状态期货订单（DELETE /futures/{settle}/orders），§6.4 事中 kill switch 用；不按 side/合约过滤
+    // 撤销全部 open 状态期货订单（DELETE /futures/{settle}/orders），事中 kill switch 用；不按 side/合约过滤
     public async Task<Result> CancelAllFuturesOrdersAsync(CancellationToken ct)
     {
         if (_credentials is null)
@@ -635,7 +635,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             decimal.Parse(dto.UnrealisedPnl, CultureInfo.InvariantCulture),
             leverage,
             isCross ? MarginMode.Cross : MarginMode.Isolated,
-            // history_pnl 是该合约生命周期累计已实现盈亏（无日切字段），日维度只能基线差分近似（§6.4）
+            // history_pnl 是该合约生命周期累计已实现盈亏（无日切字段），日维度只能基线差分近似
             dto.HistoryPnl is null ? null : decimal.Parse(dto.HistoryPnl, CultureInfo.InvariantCulture));
     }
 
@@ -685,7 +685,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             ContractMultiplier: null,
             Status: pair.TradeStatus == "tradable" ? InstrumentStatus.Trading : InstrumentStatus.Suspended);
 
-    // 数量语义（§7 铁律）：领域层统一币的数量，张数换算在此消化——
+    // 数量语义：领域层统一币的数量，张数换算在此消化——
     // MinQuantity = 最小张数 × quanto_multiplier，StepSize = 1 张 × quanto_multiplier
     private static Instrument ToFuturesInstrument(GateFuturesContract contract)
     {
@@ -694,7 +694,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         return new Instrument(
             GateSymbolFormatter.ParseFutures(contract.Name),
             TickSize: decimal.Parse(contract.OrderPriceRound, CultureInfo.InvariantCulture),
-            // enable_decimal=true 的小数张精度文档未给出，保守按 1 张步长（§7：宁保守勿激进）
+            // enable_decimal=true 的小数张精度文档未给出，保守按 1 张步长（宁保守勿激进）
             StepSize: multiplier,
             MinQuantity: contract.OrderSizeMin * multiplier,
             MinQuoteAmount: null,

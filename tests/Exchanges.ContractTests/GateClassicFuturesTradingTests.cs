@@ -47,7 +47,7 @@ public class GateClassicFuturesTradingTests : FuturesTradingContractTests
         var path = request.RequestUri!.AbsolutePath;
         if (request.Method == HttpMethod.Post && path.EndsWith("/futures/usdt/orders", StringComparison.Ordinal))
             return OkJson(OrderPlacedJson);
-        // DELETE /futures/usdt/orders：撤销全部 open 订单（kill switch，§6.4），成功响应体无映射需求
+        // DELETE /futures/usdt/orders：撤销全部 open 订单（kill switch），成功响应体无映射需求
         if (request.Method == HttpMethod.Delete && path.EndsWith("/futures/usdt/orders", StringComparison.Ordinal))
             return OkJson("{}");
         if (path.EndsWith("/futures/usdt/positions", StringComparison.Ordinal))

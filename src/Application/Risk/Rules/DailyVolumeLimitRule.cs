@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 namespace TradingClient.Application.Risk.Rules;
 
 /// <summary>
-/// 按 symbol 的当日下单量上限（§6.4）：只有网关成功下单才计入（经 IRiskOrderPlacedHook），
+/// 按 symbol 的当日下单量上限：只有网关成功下单才计入（经 IRiskOrderPlacedHook），
 /// 跨天自动清零；时钟注入便于测试。
 /// </summary>
 public sealed class DailyVolumeLimitRule(RiskLimitsProfile profile, TimeProvider clock)

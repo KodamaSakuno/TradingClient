@@ -5,12 +5,12 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Application.Risk;
 
 /// <summary>
-/// 事中风险监控（§6.4 第二层）：订阅持仓/行情/连接状态流，持续重建 RiskSnapshot 喂评估器，
+/// 事中风险监控（第二层）：订阅持仓/行情/连接状态流，持续重建 RiskSnapshot 喂评估器，
 /// 取最重态驱动 RiskStateMachine（与事前链的 RiskStateGateRule 咬合）。
 /// 恢复语义：Warning / ReduceOnly 指标回落自动降级；Locked 不自动降级（有意），
 /// 由人工 RiskStateMachine.TransitionTo(Normal) 复位。
 /// kill switch：进入 Locked（KillSwitchOnLocked）或断连（KillSwitchOnDisconnect）时撤全部在途单，
-/// 各按 episode 只触发一次；撤单走 REST 不依赖 WS 推送链路。自动减仓不接，是有意的扩展点（§6.4 可选）。
+/// 各按 episode 只触发一次；撤单走 REST 不依赖 WS 推送链路。自动减仓不接，是有意的扩展点（可选）。
 /// </summary>
 public sealed class RiskMonitor : IDisposable, IRiskSnapshotSource
 {
@@ -78,7 +78,7 @@ public sealed class RiskMonitor : IDisposable, IRiskSnapshotSource
     {
         lock (_gate)
         {
-            // 带符号净额：Quantity 恒为绝对值、方向由 Side 携带（单边模式的空头也被适配器映射为 Short，§7）
+            // 带符号净额：Quantity 恒为绝对值、方向由 Side 携带（单边模式的空头也被适配器映射为 Short）
             decimal net = 0m;
             var found = false;
             foreach (var position in _positions.Values)

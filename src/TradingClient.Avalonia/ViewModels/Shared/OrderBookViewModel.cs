@@ -14,15 +14,15 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Avalonia.ViewModels.Shared;
 
 /// <summary>
-/// 订单簿梯子（§8.2：现货/合约共用）。由 MainWindowViewModel 持有，跟随顶部选择器与 Symbol 流，
+/// 订单簿梯子（现货/合约共用）。由 MainWindowViewModel 持有，跟随顶部选择器与 Symbol 流，
 /// 切换即退订旧流、丢弃旧盘口（新建 LocalOrderBook）重建。
-/// 管道：SubscribeOrderBook → 后台线程 Apply 进本地盘口（埋点计时）→ Sample 150ms（§8.1）
+/// 管道：SubscribeOrderBook → 后台线程 Apply 进本地盘口（埋点计时）→ Sample 150ms
 /// → ObserveOn UI 线程 → 两侧各 10 档灌进 SourceCache 供绑定。
 /// </summary>
 public sealed class OrderBookViewModel : ViewModelBase, IDisposable
 {
     private const int Depth = 10;
-    private static readonly TimeSpan BookThrottle = TimeSpan.FromMilliseconds(150); // §8.1：行情节流 100–200ms
+    private static readonly TimeSpan BookThrottle = TimeSpan.FromMilliseconds(150); // 行情节流 100–200ms
 
     private readonly CompositeDisposable _subscriptions = new();
     private readonly SourceCache<OrderBookLevel, decimal> _bids = new(l => l.Price);
@@ -122,7 +122,7 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
         _lastE2eMs = e2eMs;
     }
 
-    // UI 线程执行。10 档规模下 Clear + 灌入不算 §8.1 禁的"整表重建"——
+    // UI 线程执行。10 档规模下 Clear + 灌入不是整表重建——
     // 该禁令针对的是 delta 流每次都全量重拉盘口；这里只是节流后把 Top N 投影到绑定缓存
     private void RefreshLadder(LocalOrderBook book)
     {

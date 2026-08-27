@@ -4,7 +4,7 @@ using System.Reactive.Subjects;
 namespace TradingClient.Application.Risk;
 
 /// <summary>
-/// 风控状态机（§6.4）：事前/事中两层风控的咬合点——RiskMonitor（事中监控）写状态，事前闸门读状态。
+/// 风控状态机：事前/事中两层风控的咬合点——RiskMonitor（事中监控）写状态，事前闸门读状态。
 /// 共享单例，由 Composition Root 注册。同状态迁移为空操作（不迁移不广播）。
 /// 迁移即广播 Transitions 并写审计。Locked 态的人工复位也走 TransitionTo。
 /// </summary>

@@ -29,7 +29,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     private readonly ServerTimeSync _timeSync = new();
     private readonly BitgetCredentials? _credentials;
     private readonly bool _demoTrading;
-    // 下单/撤单限频各 10次/秒/UID，共用一个令牌桶宁保守勿激进（§7）
+    // 下单/撤单限频各 10次/秒/UID，共用一个令牌桶宁保守勿激进
     private readonly TokenBucketRateLimiter _spotRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（BitgetAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
@@ -86,7 +86,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     // 供测试断言 ConnectAsync 的校时结果
     internal ServerTimeSync TimeSync => _timeSync;
 
-    // 与 Gate Classic 构成对比象限（§11）：统一账户、无需账户内划转
+    // 与 Gate Classic 构成对比象限：统一账户、无需账户内划转
     public override ExchangeCapabilities Capabilities { get; } = new(
         AccountMode.Unified,
         RequiresInternalTransfers: false,
@@ -209,7 +209,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
             return Result.Failure<SpotOrder>(new ExchangeError("INVALID_QUANTITY", "Quantity must be positive."));
         if (req is { Type: OrderType.Limit, Price: null })
             return Result.Failure<SpotOrder>(new ExchangeError("MISSING_PRICE", "Limit order requires a price."));
-        // 决策（§7 数量语义，与 Gate 同款处理）：领域 Quantity 统一为 base 币数量，而 Bitget 市价买单的
+        // 决策（数量语义，与 Gate 同款处理）：领域 Quantity 统一为 base 币数量，而 Bitget 市价买单的
         // qty 是 quote 币金额，不经行情换算无法映射，直接拒单；限价单与市价卖单的 qty 均为 base 币数量
         if (req is { Type: OrderType.Market, Side: OrderSide.Buy })
             return Result.Failure<SpotOrder>(new ExchangeError(
@@ -300,7 +300,7 @@ public sealed class BitgetConnector : ExchangeConnectorBase, IMarketData, IAccou
     private static Instrument ToInstrument(BitgetInstrument dto)
     {
         // Reality 币 baseCoin 为混合大小写（如 "rPBR"），symbol 又是无分隔符拼接、无法可靠切分，
-        // 故不走 BitgetSymbolFormatter.ParseSpot，直接用 baseCoin/quoteCoin 字段构造（§4.1）
+        // 故不走 BitgetSymbolFormatter.ParseSpot，直接用 baseCoin/quoteCoin 字段构造
         var symbol = new SpotSymbol(
             dto.BaseCoin.ToUpperInvariant(),
             dto.QuoteCoin.ToUpperInvariant());

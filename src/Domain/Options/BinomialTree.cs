@@ -3,7 +3,7 @@ using TradingClient.Domain.Instruments;
 namespace TradingClient.Domain.Options;
 
 /// <summary>
-/// CRR 二叉树，美式期货期权定价基准实现（AGENTS.md §12）。
+/// CRR 二叉树，美式期货期权定价基准实现。
 /// 期货无漂移：风险中性增长因子 a = e^(b·Δt) 中持有成本 b=0，故 p = (a − d)/(u − d) = (1 − d)/(u − d)。
 /// 奇偶步数价格会围绕真值震荡，未做相邻步数平均（Richardson 简版）：步数参数由调用方控制，
 /// 一致性测试的容差已按此放宽（见 BinomialTreeTests 注释）。

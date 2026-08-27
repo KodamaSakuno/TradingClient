@@ -2,7 +2,7 @@ namespace TradingClient.Application.Risk;
 
 public sealed record RiskRejection(string RuleName, string Code, string Reason);
 
-/// <summary>下单前风控规则（§6.4）：可插拔，由 PreTradeRiskChain 逐条执行，返回 null 表示通过。</summary>
+/// <summary>下单前风控规则：可插拔，由 PreTradeRiskChain 逐条执行，返回 null 表示通过。</summary>
 public interface IPreTradeRiskCheck
 {
     string RuleName { get; }

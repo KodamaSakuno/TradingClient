@@ -16,5 +16,5 @@ internal sealed record GateFuturesPosition(
     string? CrossLeverageLimit,
     // single / dual_long / dual_short；REST 侧据此映射 PositionSide（WS 侧同款映射见 GateFuturesPositionUpdate）
     string Mode,
-    // 该合约生命周期累计已实现盈亏（字符串数值）；无日切字段，日维度只能做基线差分近似（§6.4）
+    // 该合约生命周期累计已实现盈亏（字符串数值）；无日切字段，日维度只能做基线差分近似
     string? HistoryPnl = null);

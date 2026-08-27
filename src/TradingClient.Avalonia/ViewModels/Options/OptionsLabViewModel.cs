@@ -12,9 +12,9 @@ using TradingClient.Application.UseCases.Options;
 namespace TradingClient.Avalonia.ViewModels.Options;
 
 /// <summary>
-/// 期权实验室（§12）：T 型报价 + 波动率微笑 + 持仓 Greeks 汇总，全本地 mock，不接交易所。
+/// 期权实验室：T 型报价 + 波动率微笑 + 持仓 Greeks 汇总，全本地 mock，不接交易所。
 /// 不进 DI 容器：生命周期跟随顶部选择器，由 MainWindowViewModel 在选中「本地 · 期权」时创建、切换时释放。
-/// 参数改动去抖 300ms 后在后台线程重算（BAW 批量定价 + bump Greeks + IV 往返），算完切回 UI 线程刷新（§8.1）。
+/// 参数改动去抖 300ms 后在后台线程重算（BAW 批量定价 + bump Greeks + IV 往返），算完切回 UI 线程刷新。
 /// </summary>
 public sealed class OptionsLabViewModel : ViewModelBase, IDisposable
 {

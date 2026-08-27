@@ -41,7 +41,7 @@ public enum MarginMode
 }
 
 /// <summary>
-/// 自成交防护策略（§6.4：走交易所侧参数，客户端不做自成交拦截）。
+/// 自成交防护策略（走交易所侧参数，客户端不做自成交拦截）。
 /// 分别对应 Gate stp_act 的 cn / co / cb。
 /// </summary>
 public enum SelfTradePrevention

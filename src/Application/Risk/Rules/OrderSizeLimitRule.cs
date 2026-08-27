@@ -1,6 +1,6 @@
 namespace TradingClient.Application.Risk.Rules;
 
-/// <summary>单笔下单量上限（§6.4）。</summary>
+/// <summary>单笔下单量上限。</summary>
 public sealed class OrderSizeLimitRule(RiskLimitsProfile profile) : IPreTradeRiskCheck
 {
     public string RuleName => "OrderSizeLimit";

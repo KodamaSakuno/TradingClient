@@ -19,22 +19,22 @@ using TradingClient.Domain.Trading;
 namespace TradingClient.Avalonia.ViewModels;
 
 /// <summary>
-/// UI 骨架的单一 ViewModel（§8：本步最小形态，后续按 Shared/Spot/Futures 拆分）。
+/// UI 骨架的单一 ViewModel（本步最小形态，后续按 Shared/Spot/Futures 拆分）。
 /// 只依赖 Application 抽象与 Domain 类型，不出现任何具体连接器类型。
 /// </summary>
 public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 {
-    private static readonly TimeSpan QuoteThrottle = TimeSpan.FromMilliseconds(150); // §8.1：行情节流 100–200ms
+    private static readonly TimeSpan QuoteThrottle = TimeSpan.FromMilliseconds(150); // 行情节流 100–200ms
     private static readonly TimeSpan SymbolInputDebounce = TimeSpan.FromMilliseconds(400);
 
     private readonly ILogger _logger;
     private readonly OptionChainAnalytics _optionChainAnalytics;
     private readonly CompositeDisposable _subscriptions = new();
 
-    // 交易对输入去抖后按产品线解析出的语义化 Symbol（§4.1）；Replay(1) 让后创建的合约面板立即拿到当前符号
+    // 交易对输入去抖后按产品线解析出的语义化 Symbol；Replay(1) 让后创建的合约面板立即拿到当前符号
     private readonly IObservable<Symbol?> _parsedSymbol;
 
-    // 「本地 · 期权」选择器条目：本地分析模块（§12），不是交易所能力，不走 Capabilities（§5.2），在此显式追加
+    // 「本地 · 期权」选择器条目：本地分析模块，不是交易所能力，不走 Capabilities，在此显式追加
     private static readonly LocalModuleOption OptionsLabOption = new("本地 · 期权");
 
     public MainWindowViewModel(
@@ -50,7 +50,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         _logger = logger;
         _optionChainAnalytics = optionChainAnalytics;
 
-        // 交易所条目完全由 ExchangeRegistry + Capabilities 驱动（§5.2/§8.2），不硬编码交易所名
+        // 交易所条目完全由 ExchangeRegistry + Capabilities 驱动，不硬编码交易所名
         SelectorOptions = registry.All
             .SelectMany(c => c.Capabilities.Products.Select(p => (SelectorOption)new ConnectorOption(c, p)))
             .Append(OptionsLabOption)
@@ -72,12 +72,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .Replay(1)
             .RefCount();
 
-        // 下单票单实例：目标跟随选择器与交易对输入，产品线分派在票内完成（§8.2 Shared）
+        // 下单票单实例：目标跟随选择器与交易对输入，产品线分派在票内完成
         OrderTicket = new OrderTicketViewModel(
             placeSpotOrder, placeFuturesOrder, spotFacade, futuresFacade,
             connectorSelection, _parsedSymbol, logger);
 
-        // 订单簿梯子（§8.2 Shared）：同样跟随选择器与 Symbol 流，切换由 VM 内部退订重建
+        // 订单簿梯子（现货/合约共用）：同样跟随选择器与 Symbol 流，切换由 VM 内部退订重建
         OrderBook = new OrderBookViewModel(connectorSelection, _parsedSymbol, logger);
 
         WireConnectionStates(connectorSelection);
@@ -101,7 +101,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         set => this.RaiseAndSetIfChanged(ref _selectedOption, value);
     }
 
-    // 合约面板跟随选中项生命周期，不进 DI 容器（§8.2）；非合约选中项时为 null
+    // 合约面板跟随选中项生命周期，不进 DI 容器；非合约选中项时为 null
     private FuturesPanelViewModel? _futuresPanel;
     public FuturesPanelViewModel? FuturesPanel
     {
@@ -116,7 +116,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         private set => this.RaiseAndSetIfChanged(ref _isFuturesSelected, value);
     }
 
-    // 期权实验室（§12 本地模块）：与合约面板同款生命周期，跟随「本地 · 期权」选中项创建/释放
+    // 期权实验室（本地模块）：与合约面板同款生命周期，跟随「本地 · 期权」选中项创建/释放
     private OptionsLabViewModel? _optionsLab;
     public OptionsLabViewModel? OptionsLab
     {
@@ -253,7 +253,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            // 连接失败视为系统故障：记录日志并降级，行情订阅由适配器的重连机制兜底（§7）
+            // 连接失败视为系统故障：记录日志并降级，行情订阅由适配器的重连机制兜底
             _logger.Error(ex, "Failed to connect exchange {ExchangeId}", connector.ExchangeId);
         }
 
@@ -283,7 +283,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         AccountSummary = $"账户模式：{result.Value.Mode} · {result.Value.Assets.Count} 个币种";
     }
 
-    // 连接状态流 → 状态文本/颜色；推送在后台线程，ObserveOn 在 ViewModel 边界切回 UI 线程（§8.1）
+    // 连接状态流 → 状态文本/颜色；推送在后台线程，ObserveOn 在 ViewModel 边界切回 UI 线程
     private void WireConnectionStates(IObservable<ConnectorOption?> connectorSelection)
     {
         connectorSelection
@@ -342,8 +342,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
-    // 行情管道：Symbol 输入去抖 → 按产品线解析为语义化 Symbol（§4.1）→ 换订阅（Switch 自动退订旧流）
-    // → Sample 节流 → ViewModel 边界 ObserveOn 切 UI 线程（§8.1）
+    // 行情管道：Symbol 输入去抖 → 按产品线解析为语义化 Symbol → 换订阅（Switch 自动退订旧流）
+    // → Sample 节流 → ViewModel 边界 ObserveOn 切 UI 线程
     // IMarketData.SubscribeQuotes 签名是 Symbol，适配器按子类型路由到现货/期货频道
     private void WireQuoteStream(IObservable<ConnectorOption?> connectorSelection)
     {
@@ -372,7 +372,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
-    // 风控状态机（§6.4）：常驻显示当前状态；迁移横幅只在 ReduceOnly/Locked 停留展示，回到 Normal/Warning 收起
+    // 风控状态机：常驻显示当前状态；迁移横幅只在 ReduceOnly/Locked 停留展示，回到 Normal/Warning 收起
     private void WireRiskState(RiskStateMachine stateMachine)
     {
         ApplyRiskState(stateMachine.Current);
@@ -425,8 +425,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
 }
 
 /// <summary>
-/// 顶部选择器条目的联合类型：交易所连接器 × 产品线（Capabilities 驱动，§5.2），
-/// 或本地分析模块（§12，非交易所能力，不走 Capabilities）。
+/// 顶部选择器条目的联合类型：交易所连接器 × 产品线（Capabilities 驱动），
+/// 或本地分析模块（非交易所能力，不走 Capabilities）。
 /// </summary>
 public abstract record SelectorOption
 {
@@ -434,7 +434,7 @@ public abstract record SelectorOption
 }
 
 /// <summary>
-/// 选择器条目：一个连接器 × 一条产品线。显示名由 Capabilities 推导，禁止硬编码交易所名（§5.2）。
+/// 选择器条目：一个连接器 × 一条产品线。显示名由 Capabilities 推导，禁止硬编码交易所名。
 /// </summary>
 public sealed record ConnectorOption(IExchangeConnector Connector, ProductKind Product) : SelectorOption
 {
@@ -449,7 +449,7 @@ public sealed record ConnectorOption(IExchangeConnector Connector, ProductKind P
     };
 }
 
-/// <summary>选择器条目：本地分析模块（§12 期权实验室）。无连接器、无产品线。</summary>
+/// <summary>选择器条目：本地分析模块（期权实验室）。无连接器、无产品线。</summary>
 public sealed record LocalModuleOption(string Label) : SelectorOption
 {
     public override string DisplayName => Label;

@@ -6,7 +6,7 @@ namespace TradingClient.Persistence;
 
 /// <summary>
 /// 风控限额配置的 JSON 文件存储：文件不存在返回 null，由调用方回落内置默认配置。
-/// §9.1 的 SQLite/PostgreSQL 持久化落地前先用文件，实现 IRiskLimitsStore 即可替换。
+/// SQLite/PostgreSQL 持久化落地前先用文件，实现 IRiskLimitsStore 即可替换。
 /// </summary>
 public sealed class JsonRiskLimitsStore(string filePath) : IRiskLimitsStore
 {

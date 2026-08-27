@@ -4,10 +4,10 @@ namespace TradingClient.Exchanges.Gate.Models;
 
 /// <summary>
 /// POST /futures/{settle}/orders 请求体（仅下单用到的字段）。
-/// size 为带符号整数张：正=买/开多，负=卖/开空（§7 数量语义：币→张换算在适配器内完成）。
+/// size 为带符号整数张：正=买/开多，负=卖/开空（数量语义：币→张换算在适配器内完成）。
 /// 市价单协议形态：price "0" + tif ioc。
 /// reduce_only 仅双向持仓（dual）减仓单使用；single 模式不传（null 不序列化）。
-/// stp_act 自成交防护（§6.4）：Gate 要求账户先加入 STP 组才生效，未加入时传参会报错，
+/// stp_act 自成交防护：Gate 要求账户先加入 STP 组才生效，未加入时传参会报错，
 /// 故只在请求显式携带时序列化（WhenWritingNull）。
 /// </summary>
 internal sealed record GateFuturesOrderRequest(

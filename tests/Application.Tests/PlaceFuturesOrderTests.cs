@@ -129,7 +129,7 @@ public class PlaceFuturesOrderTests
     [Fact]
     public async Task ExecuteAsync_ProjectedPositionExceedsLimit_RealRuleRejectsBeforeGateway()
     {
-        // 真规则端到端：快照净持仓 4.9 + 买入 0.2 → 预计 5.1 超上限 5（§6.4 仓位上限）
+        // 真规则端到端：快照净持仓 4.9 + 买入 0.2 → 预计 5.1 超上限 5（仓位上限）
         var snapshots = new FakeRiskSnapshotSource();
         snapshots.SetPositionQuantity(BtcUsdtPerp, 4.9m);
         var profile = RiskTestHelpers.Profile(RiskTestHelpers.DefaultConfig with { MaxPositionQuantity = 5m });

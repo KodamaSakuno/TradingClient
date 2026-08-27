@@ -70,7 +70,7 @@ public class GateConnectorFuturesInstrumentsTests
 
         var btc = Assert.Single(instruments, i => i.Symbol.Equals(new PerpetualFuturesSymbol("BTC", "USDT")));
         Assert.Equal(ProductKind.Futures, btc.Product);
-        // 张 → 币换算（§7）：1 张 × 0.0001 = 0.0001 币
+        // 张 → 币换算：1 张 × 0.0001 = 0.0001 币
         Assert.Equal(0.0001m, btc.MinQuantity);
         Assert.Equal(0.0001m, btc.StepSize);
         // order_price_round 是显式 tick，直解析而非 Pow10Negative

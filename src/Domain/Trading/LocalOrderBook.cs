@@ -4,7 +4,7 @@ namespace TradingClient.Domain.Trading;
 
 /// <summary>
 /// 本地盘口维护器：把 OrderBookDelta 流（快照 + 增量）维护成内存中的完整盘口。
-/// 纯数据结构与算法，零依赖，是 §9.2 的 BenchmarkDotNet 基线目标路径（基准项目阶段 6 再建），
+/// 纯数据结构与算法，零依赖，是 BenchmarkDotNet 基线目标路径（基准项目阶段 6 再建），
 /// 热路径（Apply）不用 LINQ，保持分配敏感。
 /// delta 语义（适配器约定）：IsSnapshot 全量替换；档位 Quantity==0 表示删除该价位。
 /// 不做序列号校验：领域模型无 seq 字段，Gate U/u、Bitget pseq 不外传是适配器层的既定决策，

@@ -9,7 +9,7 @@ namespace TradingClient.Exchanges.Gate.WebSocket;
 /// <summary>
 /// Gate 永续合约 WS 协议（帧格式与现货同构，复用 GateWsProtocol 的信封解析与请求帧构造）
 /// 帧样本出处：.local/gate_api_futures_p_ws.md
-/// 张→币换算（§7）：推送的 size/档位量单位是张，乘数由调用方注入查询，领域类型里不出现张
+/// 张→币换算：推送的 size/档位量单位是张，乘数由调用方注入查询，领域类型里不出现张
 /// </summary>
 internal static class GateFuturesWsProtocol
 {
@@ -114,7 +114,7 @@ internal static class GateFuturesWsProtocol
             if (trade.Size == 0 || !TryParseDecimal(trade.Price, out var price))
                 continue;
 
-            // size 符号即主动方：正=主动买，负=主动卖；领域 Quantity 为币数量 = |张数| × quanto_multiplier（§7）
+            // size 符号即主动方：正=主动买，负=主动卖；领域 Quantity 为币数量 = |张数| × quanto_multiplier
             // 未知合约乘数查询抛 NotSupportedException，由订阅管线当坏消息整帧跳过
             var quantity = Math.Abs(trade.Size) * getQuantoMultiplier(trade.Contract);
             var timestamp = trade.CreateTimeMs is { } createMs
@@ -151,7 +151,7 @@ internal static class GateFuturesWsProtocol
         if (update is null)
             return null;
 
-        // 档位量是张，乘 quanto_multiplier 换成币（§7）；未知合约同上抛 NotSupportedException 当坏消息
+        // 档位量是张，乘 quanto_multiplier 换成币；未知合约同上抛 NotSupportedException 当坏消息
         var multiplier = getQuantoMultiplier(update.Contract);
 
         // full=true 即全量快照（替换本地盘口）；U/u 序列号领域模型无字段不外传，乱序重订不实现
@@ -232,7 +232,7 @@ internal static class GateFuturesWsProtocol
             // leverage 0=全仓（语义同 REST），全仓实际杠杆上限取 cross_leverage_limit
             dto.Leverage != 0 ? (int)dto.Leverage : (int)dto.CrossLeverageLimit,
             ToMarginMode(dto),
-            // history_pnl 是生命周期累计已实现盈亏（无日切字段），供 §6.4 监控做基线差分
+            // history_pnl 是生命周期累计已实现盈亏（无日切字段），供监控做基线差分
             dto.HistoryPnl);
 
     // single 模式按带符号张数定方向（size=0 无法定方向，用 Both）；dual_* 由 mode 直接给出

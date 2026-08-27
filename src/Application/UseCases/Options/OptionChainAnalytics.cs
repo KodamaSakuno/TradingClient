@@ -4,7 +4,7 @@ using TradingClient.Domain.Options;
 namespace TradingClient.Application.UseCases.Options;
 
 /// <summary>
-/// 期权链分析（§12）：纯计算、无状态，不接任何交易所。
+/// 期权链分析：纯计算、无状态，不接任何交易所。
 /// 理论价用 BAW（高频批量定价正是它的定位），Greeks 用 AmericanGreeks bump 法，
 /// IV 列对理论价往返反解作引擎自证。任一单侧计算失败只置该单元格 IV 为 null，不炸整链。
 /// </summary>

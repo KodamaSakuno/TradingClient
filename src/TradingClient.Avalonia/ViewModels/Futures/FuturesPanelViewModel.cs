@@ -34,7 +34,7 @@ public sealed class FuturesPanelViewModel : ViewModelBase, IDisposable
 
         SupportsDualPositionMode = connector.Capabilities.SupportsDualPositionMode;
 
-        // 推送在后台线程，进缓存前不切线程；绑定时由 DynamicData 管道统一切 UI 线程（§8.1/§8.2）
+        // 推送在后台线程，进缓存前不切线程；绑定时由 DynamicData 管道统一切 UI 线程
         _positions.Connect()
             .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out var positions)

@@ -3,7 +3,7 @@ using TradingClient.Domain.Instruments;
 namespace TradingClient.Application.UseCases.Options;
 
 /// <summary>
-/// 期权实验室演示数据（§12：全本地 mock，不接交易所）。豆粕（m）风格：
+/// 期权实验室演示数据（全本地 mock，不接交易所）。豆粕（m）风格：
 /// 标的 3500 元/吨、行权价档距 50、平值 IV 20%、利率 2%、期货乘数 10 吨/手。
 /// </summary>
 public static class OptionLabDemo

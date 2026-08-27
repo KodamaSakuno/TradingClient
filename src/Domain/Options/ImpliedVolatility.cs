@@ -5,7 +5,7 @@ namespace TradingClient.Domain.Options;
 
 /// <summary>
 /// 隐含波动率反解：Newton 迭代（数值 Vega 定步长）+ 二分兜底。
-/// 定价委托可注入美式引擎（BAW 或二叉树），反解出的即美式 IV（AGENTS.md §12）。
+/// 定价委托可注入美式引擎（BAW 或二叉树），反解出的即美式 IV。
 /// 搜索区间 σ ∈ [1e-4, 5.0]：下限贴近"确定性路径"退化，上限已远超商品期权实务波动率。
 /// </summary>
 public static class ImpliedVolatility
