@@ -40,6 +40,17 @@ public enum MarginMode
     PortfolioMargin,
 }
 
+/// <summary>
+/// 自成交防护策略（§6.4：走交易所侧参数，客户端不做自成交拦截）。
+/// 分别对应 Gate stp_act 的 cn / co / cb。
+/// </summary>
+public enum SelfTradePrevention
+{
+    CancelNewest,
+    CancelOldest,
+    CancelBoth,
+}
+
 /// <summary>持仓方向；Both 用于单向持仓模式，由适配器负责映射</summary>
 public enum PositionSide
 {

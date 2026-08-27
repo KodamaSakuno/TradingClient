@@ -389,7 +389,16 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             // 市价单协议形态：price "0" + tif ioc；限价单默认 gtc
             req.Type == OrderType.Limit ? req.Price!.Value.ToString(CultureInfo.InvariantCulture) : "0",
             req.Type == OrderType.Limit ? "gtc" : "ioc",
-            reduceOnly);
+            reduceOnly,
+            // 自成交防护（§6.4）：Gate 侧 stp_act 取值 cn/co/cb，仅在请求显式携带时下发
+            req.Stp switch
+            {
+                SelfTradePrevention.CancelNewest => "cn",
+                SelfTradePrevention.CancelOldest => "co",
+                SelfTradePrevention.CancelBoth => "cb",
+                null => null,
+                _ => throw new ArgumentOutOfRangeException(nameof(req), $"Unknown SelfTradePrevention {req.Stp}."),
+            });
 
         using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
             "api/v4/futures/usdt/orders", body, GateJsonContext.Default.GateFuturesOrderRequest, ct);

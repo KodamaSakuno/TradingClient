@@ -14,4 +14,9 @@ public sealed class SerilogRiskAuditSink(ILogger logger) : IRiskAuditSink
             "Risk rejection: {RuleName} {Code} {Reason} Symbol={Symbol} Side={Side} Type={OrderType} Price={Price} Quantity={Quantity}",
             rejection.RuleName, rejection.Code, rejection.Reason,
             context.Symbol.Raw, context.Side, context.Type, context.Price, context.Quantity);
+
+    public void RecordStateTransition(RiskStateTransition transition) =>
+        logger.Warning(
+            "Risk state transition: {From} -> {To} Reason={Reason} Timestamp={Timestamp}",
+            transition.From, transition.To, transition.Reason, transition.Timestamp);
 }

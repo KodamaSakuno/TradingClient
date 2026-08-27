@@ -27,4 +27,6 @@ public sealed record PlaceFuturesOrderRequest(
     decimal Quantity,
     PositionSide PositionSide,
     MarginMode MarginMode,
-    int? Leverage);
+    int? Leverage,
+    // 自成交防护走交易所侧（§6.4）；null 表示不携带，由适配器决定是否序列化
+    SelfTradePrevention? Stp = null);

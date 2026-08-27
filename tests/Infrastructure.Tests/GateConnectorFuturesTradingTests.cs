@@ -217,6 +217,42 @@ public class GateConnectorFuturesTradingTests
         Assert.Empty(captured.Requests);
     }
 
+    [Theory]
+    [InlineData(SelfTradePrevention.CancelNewest, "cn")]
+    [InlineData(SelfTradePrevention.CancelOldest, "co")]
+    [InlineData(SelfTradePrevention.CancelBoth, "cb")]
+    public async Task PlaceFuturesOrderAsync_WithStp_SerializesStpAct(SelfTradePrevention stp, string expected)
+    {
+        var connector = CreateConnector(_ => CreatedJson(OpenOrderJson), out var captured);
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Buy, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Long, MarginMode.Cross, Leverage: null, Stp: stp),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(expected, json.RootElement.GetProperty("stp_act").GetString());
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_WithoutStp_OmitsStpAct()
+    {
+        var connector = CreateConnector(_ => CreatedJson(OpenOrderJson), out var captured);
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Buy, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Long, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        // 未显式携带时不下发：Gate 要求账户加入 STP 组，未加入传参会报错
+        Assert.False(json.RootElement.TryGetProperty("stp_act", out _));
+    }
+
     [Fact]
     public async Task PlaceFuturesOrderAsync_WithZeroQuantity_ReturnsInvalidQuantityWithoutHttpCall()
     {

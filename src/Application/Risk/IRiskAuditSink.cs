@@ -7,4 +7,7 @@ namespace TradingClient.Application.Risk;
 public interface IRiskAuditSink
 {
     void Record(RiskCheckContext context, RiskRejection rejection);
+
+    /// <summary>风控状态迁移审计（§6.4：每次状态变更写审计日志）。</summary>
+    void RecordStateTransition(RiskStateTransition transition);
 }

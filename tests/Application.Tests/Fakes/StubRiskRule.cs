@@ -34,7 +34,11 @@ public sealed class StubHookRiskRule : IPreTradeRiskCheck, IRiskOrderPlacedHook
 public sealed class FakeRiskAuditSink : IRiskAuditSink
 {
     public List<(RiskCheckContext Context, RiskRejection Rejection)> Records { get; } = [];
+    public List<RiskStateTransition> Transitions { get; } = [];
 
     public void Record(RiskCheckContext context, RiskRejection rejection) =>
         Records.Add((context, rejection));
+
+    public void RecordStateTransition(RiskStateTransition transition) =>
+        Transitions.Add(transition);
 }

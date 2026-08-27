@@ -143,6 +143,8 @@ public sealed class App : global::Avalonia.Application
         services.AddSingleton<IRiskLimitsStore>(
             new JsonRiskLimitsStore(Path.Combine(AppContext.BaseDirectory, "risk-limits.json")));
         services.AddSingleton<IRiskAuditSink, SerilogRiskAuditSink>();
+        // 风控状态机共享单例（§6.4）：事前闸门读它，事中 IRiskMonitor（后续切片）写它
+        services.AddSingleton<RiskStateMachine>();
         services.AddSingleton(sp =>
             sp.GetRequiredService<IRiskLimitsStore>().LoadAsync(CancellationToken.None)
                 .GetAwaiter().GetResult()
@@ -157,6 +159,8 @@ public sealed class App : global::Avalonia.Application
                 PerSymbol: new Dictionary<string, RiskRuleConfig>()));
         services.AddSingleton(sp => new PreTradeRiskChain(
             [
+                // 状态闸门排最前：状态级检查最便宜
+                new RiskStateGateRule(sp.GetRequiredService<RiskStateMachine>()),
                 new ConnectionGuardRule(),
                 new OrderSizeLimitRule(sp.GetRequiredService<RiskLimitsProfile>()),
                 new DailyVolumeLimitRule(sp.GetRequiredService<RiskLimitsProfile>(), TimeProvider.System),
