@@ -22,6 +22,10 @@ const string TestnetWsUrl = "wss://ws-testnet.gate.com/v4/ws/spot";
 static void Log(string step, string message) =>
     Console.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [{step}] {message}");
 
+// ---------- 期货 testnet 全链路模式：--futures 分流到 FuturesSmoke，以下现货流程不受影响 ----------
+if (args.Contains("--futures"))
+    return await FuturesSmoke.RunAsync();
+
 // ---------- 1. 凭证 ----------
 var apiKey = Environment.GetEnvironmentVariable("GATE_TESTNET_API_KEY");
 var apiSecret = Environment.GetEnvironmentVariable("GATE_TESTNET_API_SECRET");
@@ -297,6 +301,16 @@ return failed ? 1 : 0;
 internal sealed record GateTicker(
     [property: JsonPropertyName("last")] string? Last);
 
+// 期货盘口（GET /futures/usdt/order_book）：档位 p=价格（字符串）、s=张数
+internal sealed record GateFuturesBookLevel(
+    [property: JsonPropertyName("p")] string Price,
+    [property: JsonPropertyName("s")] long Size);
+
+internal sealed record GateFuturesOrderBook(
+    GateFuturesBookLevel[]? Asks,
+    GateFuturesBookLevel[]? Bids);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(GateTicker[]))]
+[JsonSerializable(typeof(GateFuturesOrderBook))]
 internal sealed partial class SmokeJsonContext : JsonSerializerContext;
