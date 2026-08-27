@@ -5,8 +5,12 @@ using Avalonia.Media;
 using ReactiveUI;
 using Serilog;
 using TradingClient.Application.Abstractions;
+using TradingClient.Application.Risk;
 using TradingClient.Application.Services;
+using TradingClient.Application.UseCases.Futures;
+using TradingClient.Application.UseCases.Spot;
 using TradingClient.Avalonia.ViewModels.Futures;
+using TradingClient.Avalonia.ViewModels.Shared;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
 
@@ -27,7 +31,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     // 交易对输入去抖后按产品线解析出的语义化 Symbol（§4.1）；Replay(1) 让后创建的合约面板立即拿到当前符号
     private readonly IObservable<Symbol?> _parsedSymbol;
 
-    public MainWindowViewModel(ExchangeRegistry registry, ILogger logger)
+    public MainWindowViewModel(
+        ExchangeRegistry registry,
+        PlaceSpotOrder placeSpotOrder,
+        PlaceFuturesOrder placeFuturesOrder,
+        ISpotTrading spotFacade,
+        IFuturesTrading futuresFacade,
+        RiskStateMachine riskStateMachine,
+        ILogger logger)
     {
         _logger = logger;
 
@@ -48,13 +59,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .Replay(1)
             .RefCount();
 
+        // 下单票单实例：目标跟随选择器与交易对输入，产品线分派在票内完成（§8.2 Shared）
+        OrderTicket = new OrderTicketViewModel(
+            placeSpotOrder, placeFuturesOrder, spotFacade, futuresFacade,
+            this.WhenAnyValue(vm => vm.SelectedConnector), _parsedSymbol, logger);
+
         WireConnectionStates();
         WireQuoteStream();
         WireConnectorActivation();
         WireFuturesPanel();
+        WireRiskState(riskStateMachine);
     }
 
     public IReadOnlyList<ConnectorOption> ConnectorOptions { get; }
+
+    public OrderTicketViewModel OrderTicket { get; }
 
     private ConnectorOption? _selectedConnector;
     public ConnectorOption? SelectedConnector
@@ -125,6 +144,41 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     {
         get => _connectionBrush;
         private set => this.RaiseAndSetIfChanged(ref _connectionBrush, value);
+    }
+
+    private string _riskStateText = nameof(RiskState.Normal);
+    public string RiskStateText
+    {
+        get => _riskStateText;
+        private set => this.RaiseAndSetIfChanged(ref _riskStateText, value);
+    }
+
+    private IBrush _riskStateBrush = Brushes.Gray;
+    public IBrush RiskStateBrush
+    {
+        get => _riskStateBrush;
+        private set => this.RaiseAndSetIfChanged(ref _riskStateBrush, value);
+    }
+
+    private FontWeight _riskStateFontWeight = FontWeight.Normal;
+    public FontWeight RiskStateFontWeight
+    {
+        get => _riskStateFontWeight;
+        private set => this.RaiseAndSetIfChanged(ref _riskStateFontWeight, value);
+    }
+
+    private bool _hasRiskBanner;
+    public bool HasRiskBanner
+    {
+        get => _hasRiskBanner;
+        private set => this.RaiseAndSetIfChanged(ref _hasRiskBanner, value);
+    }
+
+    private string _riskBannerText = string.Empty;
+    public string RiskBannerText
+    {
+        get => _riskBannerText;
+        private set => this.RaiseAndSetIfChanged(ref _riskBannerText, value);
     }
 
     public ObservableCollection<AssetBalance> Balances { get; } = new();
@@ -257,6 +311,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
+    // 风控状态机（§6.4）：常驻显示当前状态；迁移横幅只在 ReduceOnly/Locked 停留展示，回到 Normal/Warning 收起
+    private void WireRiskState(RiskStateMachine stateMachine)
+    {
+        ApplyRiskState(stateMachine.Current);
+        stateMachine.Transitions
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(
+                t =>
+                {
+                    ApplyRiskState(t.To);
+                    RiskBannerText = $"{t.Timestamp.ToLocalTime():HH:mm:ss} 风控 {t.From} → {t.To}：{t.Reason}";
+                    HasRiskBanner = t.To is RiskState.ReduceOnly or RiskState.Locked;
+                },
+                ex => _logger.Error(ex, "Risk transition stream faulted"))
+            .DisposeWith(_subscriptions);
+    }
+
+    private void ApplyRiskState(RiskState state)
+    {
+        RiskStateText = state.ToString();
+        (RiskStateBrush, RiskStateFontWeight) = state switch
+        {
+            RiskState.Warning => (Brushes.DarkOrange, FontWeight.Normal),
+            RiskState.ReduceOnly => (Brushes.DarkOrange, FontWeight.Bold),
+            RiskState.Locked => (Brushes.Red, FontWeight.Bold),
+            _ => (Brushes.Gray, FontWeight.Normal),
+        };
+    }
+
     // 输入格式固定为 Base_Quote 两段：现货 → SpotSymbol，合约 → PerpetualFuturesSymbol
     private static Symbol? ParseSymbol(string text, ProductKind product)
     {
@@ -273,6 +356,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         FuturesPanel?.Dispose();
+        OrderTicket.Dispose();
         _subscriptions.Dispose();
     }
 }

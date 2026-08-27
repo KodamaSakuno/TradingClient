@@ -10,7 +10,7 @@ namespace TradingClient.Application.UseCases.Spot;
 /// 现货下单用例：先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
 /// 全部通过后转发给连接器。校验在适配器之外先做一遍，作为面向 UI 的第一道防线。
 /// </summary>
-public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain)
+public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain, IRiskSnapshotSource snapshots)
 {
     public async Task<Result<SpotOrder>> ExecuteAsync(PlaceSpotOrderRequest req, CancellationToken ct)
     {
@@ -27,10 +27,11 @@ public sealed class PlaceSpotOrder(ISpotTrading trading, InstrumentCache instrum
         if (!validation.IsSuccess)
             return Result.Failure<SpotOrder>(validation.Error!);
 
-        // LatestPrice / CurrentPositionQuantity 暂无快照源，传 null；依赖它们的规则跳过（见 RiskCheckContext）
+        // 快照源（RiskMonitor）只跟踪合约：现货 Symbol 两处查询恒为 null，
+        // 依赖它们的规则（PriceDeviation/PositionLimit）跳过——与接入快照源前的行为一致
         var riskContext = new RiskCheckContext(
             trading, req.Symbol, req.Side, req.Type, price, quantity,
-            LatestPrice: null, CurrentPositionQuantity: null);
+            snapshots.GetLatestPrice(req.Symbol), snapshots.GetCurrentPositionQuantity(req.Symbol));
         var riskResult = await riskChain.CheckAsync(riskContext, ct);
         if (!riskResult.IsSuccess)
             return Result.Failure<SpotOrder>(riskResult.Error!);

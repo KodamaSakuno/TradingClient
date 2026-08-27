@@ -5,9 +5,9 @@
         xmlns:conv="using:TradingClient.Avalonia.Converters"
         x:Class="TradingClient.Avalonia.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TradingClient" Width="720" Height="960">
+        Title="TradingClient" Width="720" Height="1100">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
 
     <!-- 交易所 + 产品选择器：条目由 ExchangeRegistry/Capabilities 驱动（§8.2） -->
     <ComboBox Grid.Row="0"
@@ -40,14 +40,44 @@
       </Grid>
     </Border>
 
-    <!-- 连接状态 -->
+    <!-- 连接状态 + 风控状态（§6.4：事前/事中咬合点的可视化） -->
     <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8">
       <TextBlock Text="连接状态" VerticalAlignment="Center" />
       <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center" />
+      <TextBlock Text="风控状态" VerticalAlignment="Center" Margin="16,0,0,0" />
+      <TextBlock Text="{Binding RiskStateText}" Foreground="{Binding RiskStateBrush}"
+                 FontWeight="{Binding RiskStateFontWeight}" VerticalAlignment="Center" />
     </StackPanel>
 
+    <!-- 风控迁移横幅：ReduceOnly/Locked 期间常驻，含时间与原因 -->
+    <Border Grid.Row="4" IsVisible="{Binding HasRiskBanner}"
+            Background="#2B0000" CornerRadius="4" Padding="8">
+      <TextBlock Text="{Binding RiskBannerText}" Foreground="Red" FontWeight="Bold" TextWrapping="Wrap" />
+    </Border>
+
+    <!-- 下单票：现货/合约共用（§8.2 Shared），按选中项产品线分派用例 -->
+    <Border Grid.Row="5" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+      <StackPanel Spacing="8">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+          <ComboBox Grid.Column="0" ItemsSource="{Binding OrderTicket.Sides}"
+                    SelectedItem="{Binding OrderTicket.SelectedSide}" MinWidth="70" />
+          <ComboBox Grid.Column="1" ItemsSource="{Binding OrderTicket.OrderTypes}"
+                    SelectedItem="{Binding OrderTicket.SelectedType}" MinWidth="80" />
+          <TextBox Grid.Column="2" Text="{Binding OrderTicket.PriceText}" Width="110"
+                   Watermark="价格" IsEnabled="{Binding OrderTicket.IsLimit}" />
+          <TextBox Grid.Column="3" Text="{Binding OrderTicket.QuantityText}" Width="110" Watermark="数量" />
+          <ComboBox Grid.Column="4" IsVisible="{Binding OrderTicket.IsFuturesProduct}"
+                    ItemsSource="{Binding OrderTicket.PositionSides}"
+                    SelectedItem="{Binding OrderTicket.SelectedPositionSide}" MinWidth="80" />
+          <Button Grid.Column="5" Content="下单" Command="{Binding OrderTicket.Submit}" />
+        </Grid>
+        <TextBlock Text="{Binding OrderTicket.ResultText}" Foreground="{Binding OrderTicket.ResultBrush}"
+                   TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+
     <!-- 合约面板：仅选中「合约」条目且连接器支持 IFuturesTrading 时可见（§8.2 读能力显隐） -->
-    <Border Grid.Row="4" IsVisible="{Binding IsFuturesSelected}"
+    <Border Grid.Row="6" IsVisible="{Binding IsFuturesSelected}"
             BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="8">
 
@@ -112,7 +142,7 @@
     </Border>
 
     <!-- 余额区 -->
-    <Border Grid.Row="5" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="7" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
       <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
         <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" />
 

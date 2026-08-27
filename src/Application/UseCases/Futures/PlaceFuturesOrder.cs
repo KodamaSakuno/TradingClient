@@ -10,7 +10,7 @@ namespace TradingClient.Application.UseCases.Futures;
 /// 合约下单用例：镜像现货——先基于 Instrument 对齐并校验（§4.2），再过下单前风控链（§6.4），
 /// 全部通过后转发给连接器。
 /// </summary>
-public sealed class PlaceFuturesOrder(IFuturesTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain)
+public sealed class PlaceFuturesOrder(IFuturesTrading trading, InstrumentCache instruments, PreTradeRiskChain riskChain, IRiskSnapshotSource snapshots)
 {
     public async Task<Result<FuturesOrder>> ExecuteAsync(PlaceFuturesOrderRequest req, CancellationToken ct)
     {
@@ -27,10 +27,11 @@ public sealed class PlaceFuturesOrder(IFuturesTrading trading, InstrumentCache i
         if (!validation.IsSuccess)
             return Result.Failure<FuturesOrder>(validation.Error!);
 
-        // LatestPrice / CurrentPositionQuantity 暂无快照源，传 null；依赖它们的规则跳过（见 RiskCheckContext）
+        // 最新价 / 带符号净持仓取自快照源（RiskMonitor 内部表）；该 Symbol 无行情订阅或无持仓时为 null，
+        // 依赖它们的规则（PriceDeviation/PositionLimit）跳过
         var riskContext = new RiskCheckContext(
             trading, req.Symbol, req.Side, req.Type, price, quantity,
-            LatestPrice: null, CurrentPositionQuantity: null);
+            snapshots.GetLatestPrice(req.Symbol), snapshots.GetCurrentPositionQuantity(req.Symbol));
         var riskResult = await riskChain.CheckAsync(riskContext, ct);
         if (!riskResult.IsSuccess)
             return Result.Failure<FuturesOrder>(riskResult.Error!);

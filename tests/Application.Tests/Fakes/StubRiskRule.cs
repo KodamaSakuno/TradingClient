@@ -2,15 +2,17 @@ using TradingClient.Application.Risk;
 
 namespace TradingClient.Application.Tests.Fakes;
 
-/// <summary>可配置拒单结果的规则桩，记录调用次数供短路断言。</summary>
+/// <summary>可配置拒单结果的规则桩，记录调用次数与最近一次上下文供断言。</summary>
 public sealed class StubRiskRule(string ruleName, RiskRejection? rejection) : IPreTradeRiskCheck
 {
     public string RuleName { get; } = ruleName;
     public int CheckCallCount { get; private set; }
+    public RiskCheckContext? LastContext { get; private set; }
 
     public ValueTask<RiskRejection?> CheckAsync(RiskCheckContext context, CancellationToken ct)
     {
         CheckCallCount++;
+        LastContext = context;
         return ValueTask.FromResult(rejection);
     }
 }

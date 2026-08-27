@@ -12,7 +12,7 @@ namespace TradingClient.Application.Risk;
 /// kill switch：进入 Locked（KillSwitchOnLocked）或断连（KillSwitchOnDisconnect）时撤全部在途单，
 /// 各按 episode 只触发一次；撤单走 REST 不依赖 WS 推送链路。自动减仓不接，是有意的扩展点（§6.4 可选）。
 /// </summary>
-public sealed class RiskMonitor : IDisposable
+public sealed class RiskMonitor : IDisposable, IRiskSnapshotSource
 {
     private readonly IFuturesTrading _trading;
     private readonly IMarketData? _marketData;
@@ -64,6 +64,31 @@ public sealed class RiskMonitor : IDisposable
             _currentDay = CurrentDay();
             _positionSubscription = _trading.PositionUpdates.Subscribe(OnPositionUpdate);
             _connectionSubscription = _trading.ConnectionStates.Subscribe(OnConnectionState);
+        }
+    }
+
+    // IRiskSnapshotSource：事前链下单时实时查，与 Reevaluate 共用同一把锁，读到的是一致快照
+    public decimal? GetLatestPrice(Symbol symbol)
+    {
+        lock (_gate)
+            return _latestPrices.TryGetValue(symbol.Raw, out var price) ? price : null;
+    }
+
+    public decimal? GetCurrentPositionQuantity(Symbol symbol)
+    {
+        lock (_gate)
+        {
+            // 带符号净额：Quantity 恒为绝对值、方向由 Side 携带（单边模式的空头也被适配器映射为 Short，§7）
+            decimal net = 0m;
+            var found = false;
+            foreach (var position in _positions.Values)
+            {
+                if (position.Symbol.Raw != symbol.Raw)
+                    continue;
+                net += position.Side == PositionSide.Short ? -position.Quantity : position.Quantity;
+                found = true;
+            }
+            return found ? net : null;
         }
     }
 

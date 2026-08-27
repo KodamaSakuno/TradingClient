@@ -207,4 +207,44 @@ public class RiskMonitorTests
 
         Assert.Equal(RiskState.Normal, machine.Current);
     }
+
+    [Fact]
+    public void GetCurrentPositionQuantity_DualLegs_ReturnsSignedNet()
+    {
+        var h = Create(Config(killSwitchOnLocked: false));
+
+        h.Trading.PushPosition(LongPosition(2m, 500m));
+        h.Trading.PushPosition(new Position(
+            BtcUsdt, PositionSide.Short, 1.5m, 500m, UnrealizedPnl: 0m, Leverage: 1, MarginMode.Cross));
+
+        // 带符号净额：Long +2 与 Short −1.5 合并为 +0.5
+        Assert.Equal(0.5m, h.Monitor.GetCurrentPositionQuantity(BtcUsdt));
+    }
+
+    [Fact]
+    public void GetCurrentPositionQuantity_NoPosition_ReturnsNull()
+    {
+        var h = Create(Config(killSwitchOnLocked: false));
+
+        Assert.Null(h.Monitor.GetCurrentPositionQuantity(BtcUsdt));
+    }
+
+    [Fact]
+    public void GetLatestPrice_QuoteReceived_ReturnsBestBidAskMid()
+    {
+        var h = Create(Config(killSwitchOnLocked: false));
+        h.Trading.PushPosition(LongPosition(1m, 500m)); // 有持仓才建立行情订阅
+
+        h.MarketData.PushQuote(new Quote(BtcUsdt, 100m, 102m, DateTimeOffset.UtcNow));
+
+        Assert.Equal(101m, h.Monitor.GetLatestPrice(BtcUsdt));
+    }
+
+    [Fact]
+    public void GetLatestPrice_NoQuote_ReturnsNull()
+    {
+        var h = Create(Config(killSwitchOnLocked: false));
+
+        Assert.Null(h.Monitor.GetLatestPrice(BtcUsdt));
+    }
 }

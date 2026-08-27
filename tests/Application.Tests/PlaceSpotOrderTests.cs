@@ -1,7 +1,9 @@
 using TradingClient.Application.Abstractions;
 using TradingClient.Application.Risk;
+using TradingClient.Application.Risk.Rules;
 using TradingClient.Application.Services;
 using TradingClient.Application.Tests.Fakes;
+using TradingClient.Application.Tests.Risk;
 using TradingClient.Application.UseCases.Spot;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
@@ -16,16 +18,18 @@ public class PlaceSpotOrderTests
     private static Instrument Instrument(InstrumentStatus status = InstrumentStatus.Trading) =>
         new(BtcUsdt, TickSize: 0.01m, StepSize: 0.001m, MinQuantity: 0.001m, null, null, status);
 
-    // 默认空规则链：全部放行
+    // 默认空规则链：全部放行；快照源默认无任何数据（两处快照 null，规则跳过路径）
     private static (PlaceSpotOrder UseCase, FakeSpotTrading Trading) CreateUseCase(
-        InstrumentStatus status = InstrumentStatus.Trading, PreTradeRiskChain? riskChain = null)
+        InstrumentStatus status = InstrumentStatus.Trading, PreTradeRiskChain? riskChain = null,
+        FakeRiskSnapshotSource? snapshots = null)
     {
         var marketData = new FakeMarketData();
         marketData.SetInstruments(ProductKind.Spot, Instrument(status));
         var trading = new FakeSpotTrading();
         return (new PlaceSpotOrder(
             trading, new InstrumentCache(marketData),
-            riskChain ?? new PreTradeRiskChain([], new FakeRiskAuditSink())), trading);
+            riskChain ?? new PreTradeRiskChain([], new FakeRiskAuditSink()),
+            snapshots ?? new FakeRiskSnapshotSource()), trading);
     }
 
     private static PlaceSpotOrderRequest LimitRequest(decimal price, decimal quantity) =>
@@ -180,5 +184,23 @@ public class PlaceSpotOrderTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(0, hook.HookCallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SnapshotPriceDeviates_RealRuleRejectsBeforeGateway()
+    {
+        // 真规则端到端：快照最新价 1.00，限价 1.23 偏离 23% > 阈值 5%（§6.4 价格偏离保护）
+        var snapshots = new FakeRiskSnapshotSource();
+        snapshots.SetLatestPrice(BtcUsdt, 1.00m);
+        var audit = new FakeRiskAuditSink();
+        var chain = new PreTradeRiskChain([new PriceDeviationRule(RiskTestHelpers.Profile())], audit);
+        var (useCase, trading) = CreateUseCase(riskChain: chain, snapshots: snapshots);
+
+        var result = await useCase.ExecuteAsync(LimitRequest(1.23m, 0.5m), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("PRICE_DEVIATION_EXCEEDED", result.Error!.Code);
+        Assert.Equal(0, trading.PlaceCallCount);
+        Assert.Single(audit.Records);
     }
 }

@@ -180,13 +180,15 @@ public sealed class App : global::Avalonia.Application
         services.AddSingleton(sp => new PlaceSpotOrder(
             sp.GetRequiredService<ISpotTrading>(),
             sp.GetRequiredService<InstrumentCache>(),
-            sp.GetRequiredService<PreTradeRiskChain>()));
+            sp.GetRequiredService<PreTradeRiskChain>(),
+            sp.GetRequiredService<IRiskSnapshotSource>()));
         services.AddSingleton(sp => new CancelSpotOrder(sp.GetRequiredService<ISpotTrading>()));
         services.AddSingleton<IFuturesTrading>(sp => sp.GetRequiredService<GateConnector>());
         services.AddSingleton(sp => new PlaceFuturesOrder(
             sp.GetRequiredService<IFuturesTrading>(),
             sp.GetRequiredService<InstrumentCache>(),
-            sp.GetRequiredService<PreTradeRiskChain>()));
+            sp.GetRequiredService<PreTradeRiskChain>(),
+            sp.GetRequiredService<IRiskSnapshotSource>()));
 
         // 事中风险监控（§6.4 第二层）：评估器可插拔，阈值读 RiskMonitorConfig
         services.AddSingleton<IReadOnlyList<IRiskEvaluator>>(sp =>
@@ -208,6 +210,10 @@ public sealed class App : global::Avalonia.Application
             sp.GetRequiredService<IRiskAuditSink>(),
             sp.GetRequiredService<RiskLimitsProfile>().MonitorOrDefault,
             TimeProvider.System));
+        // RiskMonitor 同时是事前链的快照源（§6.4）：其持仓/最新价表供下单用例组装 RiskCheckContext。
+        // 快照按 Symbol.Raw 精确匹配，现货 Symbol 不在监控表内 → 恒 null、规则跳过，天然正确；
+        // 多连接器监控分派（含快照源按交易所路由）与门面分派欠账一起留待后续
+        services.AddSingleton<IRiskSnapshotSource>(sp => sp.GetRequiredService<RiskMonitor>());
 
         services.AddSingleton<MainWindowViewModel>();
 
