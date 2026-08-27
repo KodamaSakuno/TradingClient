@@ -1,0 +1,16 @@
+{
+  "id": 15675394,
+  "user": 100000,
+  "contract": "BTC_USDT",
+  "create_time": 1546569968,
+  "size": "100",
+  "left": "100",
+  "price": "50000",
+  "fill_price": "0",
+  "tif": "gtc",
+  "is_reduce_only": false,
+  "is_close": false,
+  "is_liq": false,
+  "text": "t-contract-test",
+  "status": "open"
+}

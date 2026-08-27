@@ -5,14 +5,15 @@ using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Primitives;
 using TradingClient.Domain.Trading;
 using TradingClient.Exchanges.Common;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.Models;
 
 namespace TradingClient.Exchanges.Gate.WebSocket;
 
 /// <summary>
-/// Gate 永续合约公共行情 WS（结构与 GateSpotWsClient 对齐：引用计数订阅 + 监督循环 + 应用层 ping）
+/// Gate 永续合约行情/私有推送 WS（结构与 GateSpotWsClient 对齐：引用计数订阅 + 监督循环 + 应用层 ping）
 /// 频道前缀 futures.，端点与现货不同（实盘 fx-ws，testnet 亦不同路径）
-/// 本刀只接公共频道（tickers/trades/order_book_update），无鉴权逻辑；私有频道（orders/positions）后续刀再接
+/// 私有频道（futures.positions）与现货同款鉴权模式：请求体携带 auth，签名复用 GateWsProtocol
 /// </summary>
 internal sealed class GateFuturesWsClient : IAsyncDisposable
 {
@@ -25,6 +26,8 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
     private readonly TimeSpan _pingInterval;
     // 张→币换算的乘数查询（合约名 → quanto_multiplier）；查不到抛 NotSupportedException，当坏消息跳过该帧
     private readonly Func<string, decimal> _getQuantoMultiplier;
+    private readonly GateCredentials? _credentials;
+    private readonly ServerTimeSync? _timeSync;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<SubscriptionKey, SubscriptionEntry> _entries = new();
@@ -43,7 +46,9 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
         Action<ConnectionState> reportState,
         Func<Func<CancellationToken, Task>, CancellationToken, Task> reconnect,
         Func<string, decimal> getQuantoMultiplier,
-        TimeSpan? pingInterval = null)
+        TimeSpan? pingInterval = null,
+        GateCredentials? credentials = null,
+        ServerTimeSync? timeSync = null)
     {
         _endpoint = endpoint;
         _transportFactory = transportFactory;
@@ -51,6 +56,8 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
         _reconnect = reconnect;
         _getQuantoMultiplier = getQuantoMultiplier;
         _pingInterval = pingInterval ?? s_defaultPingInterval;
+        _credentials = credentials;
+        _timeSync = timeSync;
     }
 
     // 最优买卖价订 book_ticker（result 单对象）；trades 的 result 是数组（一条推送可含多个合约），映射后展开，与现货 spot.orders 同款处理
@@ -76,7 +83,34 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
             [GateSymbolFormatter.FormatFutures(symbol), GateFuturesWsProtocol.OrderBookInterval, GateFuturesWsProtocol.OrderBookLevel],
             envelope => GateFuturesWsProtocol.ToOrderBookDelta(envelope, _getQuantoMultiplier));
 
-    // symbolKey 即订阅路由键：合约名（如 BTC_USDT）
+    public IObservable<PositionUpdate> SubscribePositionUpdates() =>
+        SubscribePrivatePositions(envelope => GateFuturesWsProtocol.ToPositionUpdates(envelope, _getQuantoMultiplier));
+
+    // 本地强平预警（Gate 无预警频道，liq_price 已废弃，见协议层 LiquidationWarningMarginRatioThreshold 注释）；
+    // 与持仓推送订同一频道，引用计数保证底层只有一条订阅
+    public IObservable<LiquidationWarning> SubscribeLiquidationWarnings() =>
+        SubscribePrivatePositions(envelope => GateFuturesWsProtocol.ToLiquidationWarnings(envelope, _getQuantoMultiplier));
+
+    // 私有频道无凭证必然被 Gate 拒（error code 4）：订阅时直接给错误，比连上后静默失败更明确（现货同款）
+    // payload ["!", "!all"]：user id 是废弃占位符；!all 通配全部合约。一条通知含多个持仓，映射数组后展开
+    private IObservable<T> SubscribePrivatePositions<T>(Func<GateWsEnvelope, T[]?> map) where T : class
+    {
+        if (_credentials is null)
+            return Observable.Create<T>(observer =>
+            {
+                observer.OnError(new InvalidOperationException("Gate private channels require credentials."));
+                return Disposable.Empty;
+            });
+
+        return Subscribe<T[]>(
+                GateFuturesWsProtocol.ChannelPositions,
+                GateFuturesWsProtocol.PositionsAllContracts,
+                [GateFuturesWsProtocol.PositionsUserPlaceholder, GateFuturesWsProtocol.PositionsAllContracts],
+                map)
+            .SelectMany(items => items);
+    }
+
+    // symbolKey 即订阅路由键：公共频道为合约名（如 BTC_USDT），futures.positions 固定为 "!all"（result 是数组无 symbol 维度）
     private IObservable<T> Subscribe<T>(
         string channel, string symbolKey, string[] payload, Func<GateWsEnvelope, T?> map) where T : class
     {
@@ -153,8 +187,7 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
         if (lastForKey)
         {
             entry.Updates.OnCompleted();
-            SendIfConnected(GateWsProtocol.BuildRequestFrame(
-                key.Channel, GateWsProtocol.EventUnsubscribe, entry.Payload));
+            SendIfConnected(BuildRequestFrame(key.Channel, GateWsProtocol.EventUnsubscribe, entry.Payload));
         }
     }
 
@@ -242,7 +275,7 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
                 entry.Subscribed = true;
             }
 
-            await SendSafeAsync(transport, GateWsProtocol.BuildRequestFrame(
+            await SendSafeAsync(transport, BuildRequestFrame(
                 key.Channel, GateWsProtocol.EventSubscribe, entry.Payload));
         }
 
@@ -303,7 +336,10 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
             return;
         }
 
-        var symbol = GateFuturesWsProtocol.ExtractSymbol(envelope);
+        // futures.positions 的 result 是持仓数组且按 !all 订阅，无 symbol 维度，直接按频道路由（现货 spot.orders 同款特例）
+        var symbol = envelope.Channel == GateFuturesWsProtocol.ChannelPositions
+            ? GateFuturesWsProtocol.PositionsAllContracts
+            : GateFuturesWsProtocol.ExtractSymbol(envelope);
         if (symbol is null)
             return;
 
@@ -378,8 +414,18 @@ internal sealed class GateFuturesWsClient : IAsyncDisposable
         }
 
         if (transport is not null)
-            _ = SendSafeAsync(transport, GateWsProtocol.BuildRequestFrame(
+            _ = SendSafeAsync(transport, BuildRequestFrame(
                 key.Channel, GateWsProtocol.EventSubscribe, entry.Payload));
+    }
+
+    private string BuildRequestFrame(string channel, string evt, string[] payload)
+    {
+        if (!GateWsProtocol.IsPrivateChannel(channel))
+            return GateWsProtocol.BuildRequestFrame(channel, evt, payload);
+
+        // 私有频道请求体携带 auth；帧 time 与签名 time 必须一致，用校时后的时钟（现货同款）
+        var timestamp = (_timeSync?.UtcNow ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds();
+        return GateWsProtocol.BuildAuthenticatedRequestFrame(channel, evt, payload, _credentials!, timestamp);
     }
 
     private void SendIfConnected(string frame)

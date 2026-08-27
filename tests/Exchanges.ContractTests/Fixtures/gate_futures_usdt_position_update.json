@@ -1,0 +1,24 @@
+{
+  "time": 1588212926,
+  "time_ms": 1588212926123,
+  "channel": "futures.positions",
+  "event": "update",
+  "result": [
+    {
+      "contract": "BTC_USDT",
+      "size": -100,
+      "entry_price": 50000,
+      "margin": 500,
+      "maintenance_rate": 0.005,
+      "leverage": 10,
+      "cross_leverage_limit": 0,
+      "mode": "single",
+      "pos_margin_mode": "isolated",
+      "realised_pnl": 0,
+      "time": 1628736848,
+      "time_ms": 1628736848321,
+      "user": "110xxxxx",
+      "update_id": 170919
+    }
+  ]
+}

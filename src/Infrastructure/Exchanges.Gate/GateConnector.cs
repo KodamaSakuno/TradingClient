@@ -71,7 +71,9 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             SetConnectionState,
             ReconnectAsync,
             GetQuantoMultiplier,
-            wsPingInterval);
+            wsPingInterval,
+            credentials,
+            _timeSync);
     }
 
     public override string ExchangeId => "Gate";
@@ -311,11 +313,16 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         return Result.Success();
     }
 
+    // 期货私有 WS 推送：订 futures.positions 前确保张→币乘数缓存就绪（订阅动作发生时执行）
     public IObservable<PositionUpdate> PositionUpdates =>
-        throw new NotImplementedException(); // 下一刀接期货私有 WS 时实现
+        Observable.FromAsync(EnsureFuturesContractsCachedAsync)
+            .SelectMany(_ => _futuresWsClient.SubscribePositionUpdates());
 
+    // Gate 无事前强平预警频道且推送的 liq_price 已废弃，预警由持仓推送本地线性估算（协议层注释有完整说明）；
+    // 与 PositionUpdates 共用同一条 futures.positions 订阅（client 引用计数去重）
     public IObservable<LiquidationWarning> LiquidationWarnings =>
-        throw new NotImplementedException(); // 同上
+        Observable.FromAsync(EnsureFuturesContractsCachedAsync)
+            .SelectMany(_ => _futuresWsClient.SubscribeLiquidationWarnings());
 
     public async Task<Result<FuturesOrder>> PlaceFuturesOrderAsync(PlaceFuturesOrderRequest req, CancellationToken ct)
     {

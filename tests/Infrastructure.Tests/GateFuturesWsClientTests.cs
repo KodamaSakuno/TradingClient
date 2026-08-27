@@ -3,6 +3,7 @@ using System.Text.Json;
 using TradingClient.Domain.Instruments;
 using TradingClient.Domain.Trading;
 using TradingClient.Exchanges.Common;
+using TradingClient.Exchanges.Gate.Auth;
 using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Infrastructure.Tests;
@@ -287,14 +288,146 @@ public class GateFuturesWsClientTests
             "futures.ping frame");
     }
 
+    [Fact]
+    public async Task SubscribePositionUpdates_WithCredentials_SendsAuthenticatedAllContractsFrame()
+    {
+        var transport = new FakeWsTransport();
+        var credentials = new GateCredentials("test-key", "test-secret");
+        await using var client = CreateClient(transport, credentials: credentials);
+
+        using var sub = client.SubscribePositionUpdates().Subscribe(new Collector<PositionUpdate>());
+
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+        using var doc = JsonDocument.Parse(transport.SentFrames[0]);
+        var root = doc.RootElement;
+        Assert.Equal("futures.positions", root.GetProperty("channel").GetString());
+        Assert.Equal("subscribe", root.GetProperty("event").GetString());
+        // payload 首位是废弃的 user id 占位符；!all 通配全部合约
+        Assert.Equal(["!", "!all"],
+            root.GetProperty("payload").EnumerateArray().Select(e => e.GetString()).ToArray());
+        var auth = root.GetProperty("auth");
+        Assert.Equal("api_key", auth.GetProperty("method").GetString());
+        Assert.Equal("test-key", auth.GetProperty("KEY").GetString());
+        // 帧 time 与签名 time 必须一致
+        Assert.Equal(
+            GateSigner.SignWs("test-secret", "futures.positions", "subscribe", root.GetProperty("time").GetInt64()),
+            auth.GetProperty("SIGN").GetString());
+    }
+
+    [Fact]
+    public async Task SubscribePositionUpdates_WithoutCredentials_EmitsOnError()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await client.SubscribePositionUpdates().FirstAsync());
+
+        Assert.Equal("Gate private channels require credentials.", error.Message);
+        Assert.Equal(0, transport.ConnectCount);
+    }
+
+    // 推送帧样本形态对齐 ws 文档 futures.positions 通知示例（2026-08-27 取自 .local/gate_api_futures_p_ws.md）；
+    // result 是数组且无 symbol 维度，按 !all 固定路由键分发（现货 spot.orders 同款特例）
+    private const string PositionUpdateJson = """
+        {
+          "time": 1588212926,
+          "time_ms": 1588212926123,
+          "channel": "futures.positions",
+          "event": "update",
+          "result": [
+            {
+              "contract": "BTC_USDT",
+              "size": -3,
+              "entry_price": 40000.5,
+              "margin": 49.999,
+              "maintenance_rate": 0.005,
+              "leverage": 0,
+              "cross_leverage_limit": 10,
+              "mode": "single",
+              "pos_margin_mode": "cross",
+              "time_ms": 1628736848321,
+              "user": "110xxxxx",
+              "update_id": 170919
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public async Task PositionsNotification_AfterSubscribe_DispatchesMappedPositionUpdate()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+        var collector = new Collector<PositionUpdate>();
+
+        using var sub = client.SubscribePositionUpdates().Subscribe(collector);
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        transport.Push(PositionUpdateJson);
+
+        await WaitForAsync(() => collector.Items.Count == 1, "position update");
+        var update = collector.Items[0];
+        Assert.Equal(BtcUsdt, update.Position.Symbol);
+        Assert.Equal(PositionSide.Short, update.Position.Side);
+        Assert.Equal(0.0003m, update.Position.Quantity); // 3 张 × 0.0001
+        Assert.Equal(40000.5m, update.Position.EntryPrice);
+        Assert.Equal(MarginMode.Cross, update.Position.MarginMode);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1628736848321), update.Timestamp);
+    }
+
+    [Fact]
+    public async Task PositionsNotification_WhenMarginRatioHigh_DispatchesLiquidationWarning()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+        var collector = new Collector<LiquidationWarning>();
+
+        using var sub = client.SubscribeLiquidationWarnings().Subscribe(collector);
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        // notional = 100 张 × 0.0001 × 50000 = 500，margin 3 → 比率 ≈ 0.833 ≥ 阈值
+        transport.Push(PositionUpdateJson
+            .Replace("\"size\": -3", "\"size\": 100")
+            .Replace("\"entry_price\": 40000.5", "\"entry_price\": 50000")
+            .Replace("\"margin\": 49.999", "\"margin\": 3"));
+
+        await WaitForAsync(() => collector.Items.Count == 1, "liquidation warning");
+        var warning = collector.Items[0];
+        Assert.Equal(BtcUsdt, warning.Symbol);
+        Assert.Equal(PositionSide.Long, warning.Side);
+        Assert.Equal(2.5m / 3m, warning.MarginRatio);
+        Assert.Equal(49950m, warning.EstimatedLiquidationPrice);
+    }
+
+    [Fact]
+    public async Task UnsubscribePositionUpdates_LastSubscriber_SendsAuthenticatedUnsubscribeFrame()
+    {
+        var transport = new FakeWsTransport();
+        await using var client = CreateClient(transport, credentials: new GateCredentials("k", "s"));
+
+        var sub = client.SubscribePositionUpdates().Subscribe(new Collector<PositionUpdate>());
+        await WaitForAsync(() => transport.SentFrames.Count == 1, "subscribe frame");
+
+        sub.Dispose();
+
+        await WaitForAsync(() => transport.SentFrames.Count == 2, "unsubscribe frame");
+        using var doc = JsonDocument.Parse(transport.SentFrames[1]);
+        var root = doc.RootElement;
+        Assert.Equal("futures.positions", root.GetProperty("channel").GetString());
+        Assert.Equal("unsubscribe", root.GetProperty("event").GetString());
+        Assert.Equal("k", root.GetProperty("auth").GetProperty("KEY").GetString());
+    }
+
     private static GateFuturesWsClient CreateClient(
-        FakeWsTransport transport, TimeSpan? pingInterval = null) =>
+        FakeWsTransport transport, TimeSpan? pingInterval = null, GateCredentials? credentials = null) =>
         new(new Uri("wss://localhost/futures/ws"),
             () => transport,
             _ => { },
             ReconnectImmediately,
             GetMultiplier,
-            pingInterval ?? TimeSpan.FromHours(1)); // 默认关掉 ping 干扰，单独用例再开
+            pingInterval ?? TimeSpan.FromHours(1), // 默认关掉 ping 干扰，单独用例再开
+            credentials);
 
     // 测试用立即重连，替代基类退避策略以免拖慢用例
     private static async Task ReconnectImmediately(Func<CancellationToken, Task> connect, CancellationToken ct)

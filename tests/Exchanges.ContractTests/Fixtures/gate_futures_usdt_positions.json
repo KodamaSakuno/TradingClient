@@ -1,0 +1,11 @@
+[
+  {
+    "contract": "BTC_USDT",
+    "size": "-100",
+    "entry_price": "50000",
+    "unrealised_pnl": "0",
+    "leverage": "10",
+    "cross_leverage_limit": "0",
+    "mode": "single"
+  }
+]

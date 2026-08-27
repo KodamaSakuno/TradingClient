@@ -266,4 +266,214 @@ public class GateFuturesWsProtocolTests
 
         Assert.True(GateFuturesWsProtocol.IsUpgradeNotice(envelope));
     }
+
+    // 出处：.local/gate_api_futures_p_ws.md futures.positions 通知示例（2026-08-27 取，字段裁剪为映射所需）；
+    // 推送里数值字段是 JSON number（非字符串），且推送无 unrealised_pnl
+    private const string PositionUpdateJson = """
+        {
+          "time": 1588212926,
+          "time_ms": 1588212926123,
+          "channel": "futures.positions",
+          "event": "update",
+          "result": [
+            {
+              "contract": "BTC_USDT",
+              "size": 3,
+              "entry_price": 40000.5,
+              "margin": 49.999,
+              "maintenance_rate": 0.005,
+              "leverage": 0,
+              "cross_leverage_limit": 10,
+              "mode": "single",
+              "pos_margin_mode": "cross",
+              "time_ms": 1628736848321,
+              "user": "110xxxxx",
+              "update_id": 170919
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void ToPositionUpdates_SingleModePositiveSize_MapsLong()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(PositionUpdateJson)!;
+
+        var update = Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier)!);
+
+        Assert.Equal(BtcUsdtPerp, update.Position.Symbol);
+        Assert.Equal(PositionSide.Long, update.Position.Side);
+        // 3 张 × 0.0001 = 0.0003 币（§7：领域类型不出现张）
+        Assert.Equal(0.0003m, update.Position.Quantity);
+        Assert.Equal(40000.5m, update.Position.EntryPrice);
+        // 推送无 unrealised_pnl，置 0
+        Assert.Equal(0m, update.Position.UnrealizedPnl);
+        Assert.Equal(MarginMode.Cross, update.Position.MarginMode);
+        // 全仓（leverage 0）实际杠杆上限取 cross_leverage_limit
+        Assert.Equal(10, update.Position.Leverage);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1628736848321), update.Timestamp);
+    }
+
+    [Fact]
+    public void ToPositionUpdates_SingleModeNegativeSize_MapsShort()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(PositionUpdateJson.Replace("\"size\": 3", "\"size\": -3"))!;
+
+        var update = Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier)!);
+
+        Assert.Equal(PositionSide.Short, update.Position.Side);
+        Assert.Equal(0.0003m, update.Position.Quantity);
+    }
+
+    [Fact]
+    public void ToPositionUpdates_SingleModeZeroSize_MapsBoth()
+    {
+        // size=0（平完仓的推送）无法定方向，用 Both
+        var envelope = GateWsProtocol.ParseEnvelope(PositionUpdateJson.Replace("\"size\": 3", "\"size\": 0"))!;
+
+        var update = Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier)!);
+
+        Assert.Equal(PositionSide.Both, update.Position.Side);
+    }
+
+    [Fact]
+    public void ToPositionUpdates_DualModes_MapDeclaredSides()
+    {
+        // 双向持仓模式方向由 mode 直接给出，不看 size 符号
+        var longEnvelope = GateWsProtocol.ParseEnvelope(
+            PositionUpdateJson.Replace("\"mode\": \"single\"", "\"mode\": \"dual_long\""))!;
+        var shortEnvelope = GateWsProtocol.ParseEnvelope(
+            PositionUpdateJson
+                .Replace("\"mode\": \"single\"", "\"mode\": \"dual_short\"")
+                .Replace("\"size\": 3", "\"size\": -3"))!;
+
+        Assert.Equal(PositionSide.Long,
+            Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(longEnvelope, GetMultiplier)!).Position.Side);
+        Assert.Equal(PositionSide.Short,
+            Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(shortEnvelope, GetMultiplier)!).Position.Side);
+    }
+
+    [Fact]
+    public void ToPositionUpdates_WithoutPosMarginMode_FallsBackToLeverage()
+    {
+        var json = PositionUpdateJson.Replace("\"pos_margin_mode\": \"cross\",", "");
+        var crossEnvelope = GateWsProtocol.ParseEnvelope(json)!;
+        var isolatedEnvelope = GateWsProtocol.ParseEnvelope(json.Replace("\"leverage\": 0,", "\"leverage\": 10,"))!;
+
+        // leverage 0 = 全仓（语义陷阱同 REST），非 0 = 逐仓
+        Assert.Equal(MarginMode.Cross,
+            Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(crossEnvelope, GetMultiplier)!).Position.MarginMode);
+        var isolated = Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(isolatedEnvelope, GetMultiplier)!);
+        Assert.Equal(MarginMode.Isolated, isolated.Position.MarginMode);
+        Assert.Equal(10, isolated.Position.Leverage);
+    }
+
+    [Fact]
+    public void ToPositionUpdates_PosMarginMode_TakesPrecedenceOverLeverageFallback()
+    {
+        var json = PositionUpdateJson.Replace("\"pos_margin_mode\": \"cross\"", "\"pos_margin_mode\": \"isolated\"");
+        var envelope = GateWsProtocol.ParseEnvelope(json)!;
+
+        // leverage 0 本应回退全仓，但 pos_margin_mode=isolated 优先
+        var update = Assert.Single(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier)!);
+        Assert.Equal(MarginMode.Isolated, update.Position.MarginMode);
+    }
+
+    // ack 形态（result 是对象而非数组）属于坏消息
+    private const string PositionNonArrayResultJson = """
+        {
+          "time": 1588212926,
+          "time_ms": 1588212926123,
+          "channel": "futures.positions",
+          "event": "update",
+          "result": { "status": "success" }
+        }
+        """;
+
+    [Fact]
+    public void ToPositionUpdates_WithNonArrayResult_ReturnsNull()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(PositionNonArrayResultJson)!;
+
+        Assert.Null(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier));
+    }
+
+    [Fact]
+    public void ToPositionUpdates_WithMalformedElement_ReturnsNull()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(
+            PositionUpdateJson.Replace("\"size\": 3", "\"size\": \"abc\""))!;
+
+        Assert.Null(GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier));
+    }
+
+    [Fact]
+    public void ToPositionUpdates_WithUnknownContract_ThrowsNotSupported()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(PositionUpdateJson.Replace("BTC_USDT", "UNKNOWN_USDT"))!;
+
+        Assert.Throws<NotSupportedException>(() => GateFuturesWsProtocol.ToPositionUpdates(envelope, GetMultiplier));
+    }
+
+    [Fact]
+    public void ToLiquidationWarnings_BelowThreshold_ReturnsEmpty()
+    {
+        // margin 49.999 ≫ 维持保证金（12.00015 × 0.005 ≈ 0.06），比率远低于阈值
+        var envelope = GateWsProtocol.ParseEnvelope(PositionUpdateJson)!;
+
+        Assert.Empty(GateFuturesWsProtocol.ToLiquidationWarnings(envelope, GetMultiplier)!);
+    }
+
+    [Fact]
+    public void ToLiquidationWarnings_AboveThreshold_EmitsWarningWithEstimatedPriceBelowEntry()
+    {
+        // notional = 100 张 × 0.0001 × 50000 = 500；margin 3 → 比率 = 500×0.005/3 ≈ 0.833 ≥ 0.8
+        var envelope = GateWsProtocol.ParseEnvelope(HighRiskPositionUpdateJson)!;
+
+        var warning = Assert.Single(GateFuturesWsProtocol.ToLiquidationWarnings(envelope, GetMultiplier)!);
+
+        Assert.Equal(BtcUsdtPerp, warning.Symbol);
+        Assert.Equal(PositionSide.Long, warning.Side);
+        Assert.Equal(2.5m / 3m, warning.MarginRatio);
+        // 线性估算：50000 × (1 − 3/500 + 0.005) = 49950（多头强平价低于入场价）
+        Assert.Equal(49950m, warning.EstimatedLiquidationPrice);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1628736848321), warning.Timestamp);
+    }
+
+    [Fact]
+    public void ToLiquidationWarnings_ShortPositionAboveThreshold_EstimatesPriceAboveEntry()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(
+            HighRiskPositionUpdateJson.Replace("\"size\": 100", "\"size\": -100"))!;
+
+        var warning = Assert.Single(GateFuturesWsProtocol.ToLiquidationWarnings(envelope, GetMultiplier)!);
+
+        Assert.Equal(PositionSide.Short, warning.Side);
+        // 空头镜像：50000 × (1 + 3/500 − 0.005) = 50050
+        Assert.Equal(50050m, warning.EstimatedLiquidationPrice);
+    }
+
+    [Fact]
+    public void ToLiquidationWarnings_ZeroMargin_Skips()
+    {
+        // margin=0（开仓/平仓中间态）无法计算比率
+        var envelope = GateWsProtocol.ParseEnvelope(
+            HighRiskPositionUpdateJson.Replace("\"margin\": 3,", "\"margin\": 0,"))!;
+
+        Assert.Empty(GateFuturesWsProtocol.ToLiquidationWarnings(envelope, GetMultiplier)!);
+    }
+
+    [Fact]
+    public void ToLiquidationWarnings_WithNonArrayResult_ReturnsNull()
+    {
+        var envelope = GateWsProtocol.ParseEnvelope(PositionNonArrayResultJson)!;
+
+        Assert.Null(GateFuturesWsProtocol.ToLiquidationWarnings(envelope, GetMultiplier));
+    }
+
+    // 高保证金占比持仓：margin 3 vs notional 500，触发本地预警阈值
+    private static readonly string HighRiskPositionUpdateJson = PositionUpdateJson
+        .Replace("\"size\": 3", "\"size\": 100")
+        .Replace("\"entry_price\": 40000.5", "\"entry_price\": 50000")
+        .Replace("\"margin\": 49.999", "\"margin\": 3");
 }

@@ -38,7 +38,8 @@ internal static class GateWsProtocol
             GateJsonContext.Default.GateWsRequest);
 
     /// <summary>该频道的 subscribe/unsubscribe 请求体必须带 auth（api_key 签名）</summary>
-    public static bool IsPrivateChannel(string channel) => channel == ChannelOrders;
+    public static bool IsPrivateChannel(string channel) =>
+        channel is ChannelOrders or GateFuturesWsProtocol.ChannelPositions;
 
     // 帧的 time 必须与签名串中的 time 一致，由调用方用校时后的时钟统一给出
     public static string BuildAuthenticatedRequestFrame(
