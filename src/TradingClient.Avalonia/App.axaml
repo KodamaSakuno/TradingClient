@@ -4,5 +4,8 @@
              RequestedThemeVariant="Default">
   <Application.Styles>
     <FluentTheme />
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif" />
+    </Style>
   </Application.Styles>
 </Application>
