@@ -1,35 +1,38 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TradingClient.Avalonia.ViewModels"
+        xmlns:options="using:TradingClient.Avalonia.ViewModels.Options"
         xmlns:trading="using:TradingClient.Domain.Trading"
         xmlns:conv="using:TradingClient.Avalonia.Converters"
         x:Class="TradingClient.Avalonia.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TradingClient" Width="720" Height="1450">
+        Title="TradingClient" Width="980" Height="1450">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" Margin="12" RowSpacing="12">
+  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="12" RowSpacing="12">
 
-    <!-- 交易所 + 产品选择器：条目由 ExchangeRegistry/Capabilities 驱动（§8.2） -->
+    <!-- 交易所 + 产品选择器：交易所条目由 ExchangeRegistry/Capabilities 驱动（§8.2），「本地 · 期权」为本地模块条目 -->
     <ComboBox Grid.Row="0"
-              ItemsSource="{Binding ConnectorOptions}"
-              SelectedItem="{Binding SelectedConnector}"
+              ItemsSource="{Binding SelectorOptions}"
+              SelectedItem="{Binding SelectedOption}"
               HorizontalAlignment="Left" MinWidth="200">
       <ComboBox.ItemTemplate>
-        <DataTemplate DataType="vm:ConnectorOption">
+        <DataTemplate DataType="vm:SelectorOption">
           <TextBlock Text="{Binding DisplayName}" />
         </DataTemplate>
       </ComboBox.ItemTemplate>
     </ComboBox>
 
     <!-- 交易对输入 -->
-    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
+                IsVisible="{Binding IsExchangeSelected}">
       <TextBlock Text="交易对" VerticalAlignment="Center" />
       <TextBox Text="{Binding SymbolText, UpdateSourceTrigger=PropertyChanged}" Width="160" Watermark="BTC_USDT" />
       <TextBlock Text="{Binding SymbolMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
     </StackPanel>
 
     <!-- Ticker 区 -->
-    <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
+            IsVisible="{Binding IsExchangeSelected}">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="16">
         <TextBlock Grid.Column="0" Text="Best Bid" />
         <TextBlock Grid.Column="1" Text="{Binding BestBid}" FontWeight="Bold" />
@@ -41,7 +44,8 @@
     </Border>
 
     <!-- 订单簿梯子（§8.2 Shared）：asks 降序展示（顶部最远档、底部贴近价差行），bids 顶部为最优买价 -->
-    <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
+            IsVisible="{Binding IsExchangeSelected}">
       <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="4">
         <Grid Grid.Row="0" ColumnDefinitions="160,*">
           <TextBlock Grid.Column="0" Text="价格" FontWeight="Bold" />
@@ -94,7 +98,8 @@
     </Border>
 
     <!-- 下单票：现货/合约共用（§8.2 Shared），按选中项产品线分派用例 -->
-    <Border Grid.Row="6" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="6" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
+            IsVisible="{Binding IsExchangeSelected}">
       <StackPanel Spacing="8">
         <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
           <ComboBox Grid.Column="0" ItemsSource="{Binding OrderTicket.Sides}"
@@ -180,7 +185,8 @@
     </Border>
 
     <!-- 余额区 -->
-    <Border Grid.Row="8" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <Border Grid.Row="8" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
+            IsVisible="{Binding IsExchangeSelected}">
       <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
         <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" />
 
@@ -203,6 +209,145 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
         </ScrollViewer>
+      </Grid>
+    </Border>
+
+    <!-- 期权实验室（§12 本地分析模块）：仅选中「本地 · 期权」时可见。
+         微笑曲线用 Polyline 手绘而不引 LiveCharts2/ScottPlot：单条曲线不值一个包；
+         坐标轴留白、不画全刻度——演示形态，曲面拟合与坐标轴刻度同属增强项 -->
+    <Border Grid.Row="9" IsVisible="{Binding IsOptionsLabSelected}"
+            BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+      <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
+
+        <!-- 参数行：改动去抖 300ms 后后台线程重算 -->
+        <WrapPanel Grid.Row="0">
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="标的 F" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.ForwardText, UpdateSourceTrigger=PropertyChanged}" Width="64" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="利率 r" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.RateText, UpdateSourceTrigger=PropertyChanged}" Width="56" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="平值 σ₀" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.AtmVolText, UpdateSourceTrigger=PropertyChanged}" Width="56" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="偏斜 a" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.SmileSkewText, UpdateSourceTrigger=PropertyChanged}" Width="56" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="曲率 b" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.SmileCurvatureText, UpdateSourceTrigger=PropertyChanged}" Width="56" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="档位数" VerticalAlignment="Center" />
+            <TextBox Text="{Binding OptionsLab.StrikeCountText, UpdateSourceTrigger=PropertyChanged}" Width="48" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
+            <TextBlock Text="期限" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding OptionsLab.Tenors}"
+                      SelectedItem="{Binding OptionsLab.SelectedTenor}" MinWidth="80" />
+          </StackPanel>
+          <TextBlock Text="{Binding OptionsLab.ParamMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
+        </WrapPanel>
+
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto" ColumnSpacing="16">
+
+          <!-- T 型报价表：Call 侧 | 行权价 | Put 侧镜像；平值档加粗，实值区底色区分 -->
+          <StackPanel Grid.Column="0" Spacing="2">
+            <Grid ColumnDefinitions="66,54,68,54,56,66,88,66,56,54,68,54,66">
+              <TextBlock Grid.Column="0" Text="C-IV" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="1" Text="C-Δ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="2" Text="C-Γ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="3" Text="C-Vega" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="4" Text="C-Θ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="5" Text="C-理论价" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="6" Text="行权价" FontWeight="Bold" TextAlignment="Center" />
+              <TextBlock Grid.Column="7" Text="P-理论价" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="8" Text="P-Θ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="9" Text="P-Vega" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="10" Text="P-Γ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="11" Text="P-Δ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="12" Text="P-IV" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+            </Grid>
+            <ScrollViewer MaxHeight="360">
+              <ItemsControl ItemsSource="{Binding OptionsLab.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="options:TQuoteRowViewModel">
+                    <Grid ColumnDefinitions="66,54,68,54,56,66,88,66,56,54,68,54,66">
+                      <Border Grid.Column="0" Grid.ColumnSpan="6" Background="{Binding CallBackground}" />
+                      <Border Grid.Column="7" Grid.ColumnSpan="6" Background="{Binding PutBackground}" />
+                      <TextBlock Grid.Column="0" Text="{Binding CallIvText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="1" Text="{Binding CallDeltaText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="2" Text="{Binding CallGammaText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="3" Text="{Binding CallVegaText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="4" Text="{Binding CallThetaText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="5" Text="{Binding CallTheoText}" TextAlignment="Right" Margin="4,0" />
+                      <TextBlock Grid.Column="6" Text="{Binding StrikeText}" TextAlignment="Center"
+                                 FontWeight="{Binding StrikeWeight}" />
+                      <TextBlock Grid.Column="7" Text="{Binding PutTheoText}" TextAlignment="Left" Margin="4,0" />
+                      <TextBlock Grid.Column="8" Text="{Binding PutThetaText}" TextAlignment="Left" Margin="4,0" />
+                      <TextBlock Grid.Column="9" Text="{Binding PutVegaText}" TextAlignment="Left" Margin="4,0" />
+                      <TextBlock Grid.Column="10" Text="{Binding PutGammaText}" TextAlignment="Left" Margin="4,0" />
+                      <TextBlock Grid.Column="11" Text="{Binding PutDeltaText}" TextAlignment="Left" Margin="4,0" />
+                      <TextBlock Grid.Column="12" Text="{Binding PutIvText}" TextAlignment="Left" Margin="4,0" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </StackPanel>
+
+          <!-- 波动率微笑：横轴 m = ln(K/F)，纵轴 σ；红点为平值点 -->
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="波动率微笑（横轴 m，纵轴 σ）" FontWeight="Bold" />
+            <Canvas Width="440" Height="180" Background="#FAFAFA">
+              <Polyline Points="{Binding OptionsLab.SmilePoints}" Stroke="#1E6FD9" StrokeThickness="2"
+                        IsVisible="{Binding OptionsLab.HasSmile}" />
+              <Ellipse Width="8" Height="8" Fill="#C0392B"
+                       IsVisible="{Binding OptionsLab.HasSmile}"
+                       Canvas.Left="{Binding OptionsLab.AtmX}" Canvas.Top="{Binding OptionsLab.AtmY}" />
+            </Canvas>
+            <Grid ColumnDefinitions="Auto,*">
+              <TextBlock Grid.Column="0" Text="{Binding OptionsLab.SmileMinVolText}" FontSize="11" Foreground="Gray" />
+              <TextBlock Grid.Column="1" Text="{Binding OptionsLab.SmileMaxVolText}" FontSize="11" Foreground="Gray"
+                         HorizontalAlignment="Right" />
+            </Grid>
+          </StackPanel>
+        </Grid>
+
+        <!-- 持仓 Greeks 汇总：mock 持仓 + 合计行 + Delta 对冲建议 -->
+        <StackPanel Grid.Row="2" Spacing="4">
+          <TextBlock Text="持仓 Greeks 汇总（mock 持仓，数量单位：吨）" FontWeight="Bold" />
+          <Grid ColumnDefinitions="220,70,70,80,80,80,80">
+            <TextBlock Grid.Column="0" Text="Symbol" FontWeight="Bold" />
+            <TextBlock Grid.Column="1" Text="数量" FontWeight="Bold" TextAlignment="Right" />
+            <TextBlock Grid.Column="2" Text="开仓价" FontWeight="Bold" TextAlignment="Right" />
+            <TextBlock Grid.Column="3" Text="Δ" FontWeight="Bold" TextAlignment="Right" />
+            <TextBlock Grid.Column="4" Text="Γ" FontWeight="Bold" TextAlignment="Right" />
+            <TextBlock Grid.Column="5" Text="Vega" FontWeight="Bold" TextAlignment="Right" />
+            <TextBlock Grid.Column="6" Text="Θ" FontWeight="Bold" TextAlignment="Right" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding OptionsLab.PositionRows}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="options:PositionGreeksRowViewModel">
+                <Grid ColumnDefinitions="220,70,70,80,80,80,80">
+                  <TextBlock Grid.Column="0" Text="{Binding SymbolText}" />
+                  <TextBlock Grid.Column="1" Text="{Binding QuantityText}" TextAlignment="Right" />
+                  <TextBlock Grid.Column="2" Text="{Binding OpenPriceText}" TextAlignment="Right" />
+                  <TextBlock Grid.Column="3" Text="{Binding DeltaText}" TextAlignment="Right" />
+                  <TextBlock Grid.Column="4" Text="{Binding GammaText}" TextAlignment="Right" />
+                  <TextBlock Grid.Column="5" Text="{Binding VegaText}" TextAlignment="Right" />
+                  <TextBlock Grid.Column="6" Text="{Binding ThetaText}" TextAlignment="Right" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Text="{Binding OptionsLab.TotalsText}" FontWeight="Bold" />
+          <TextBlock Text="{Binding OptionsLab.HedgeText}" Foreground="#B03A2E" FontWeight="Bold" />
+        </StackPanel>
       </Grid>
     </Border>
 

@@ -10,6 +10,7 @@ using TradingClient.Application.Risk.Evaluators;
 using TradingClient.Application.Risk.Rules;
 using TradingClient.Application.Services;
 using TradingClient.Application.UseCases.Futures;
+using TradingClient.Application.UseCases.Options;
 using TradingClient.Application.UseCases.Spot;
 using TradingClient.Avalonia.Risk;
 using TradingClient.Avalonia.ViewModels;
@@ -217,6 +218,9 @@ public sealed class App : global::Avalonia.Application
         // 快照按 Symbol.Raw 精确匹配，现货 Symbol 不在监控表内 → 恒 null、规则跳过，天然正确；
         // 多连接器监控分派（含快照源按交易所路由）与门面分派欠账一起留待后续
         services.AddSingleton<IRiskSnapshotSource>(sp => sp.GetRequiredService<RiskMonitor>());
+
+        // 期权实验室（§12 本地分析模块）：纯计算服务，OptionsLabViewModel 由 MainWindowViewModel 跟随选择器创建
+        services.AddSingleton<OptionChainAnalytics>();
 
         services.AddSingleton<MainWindowViewModel>();
 
