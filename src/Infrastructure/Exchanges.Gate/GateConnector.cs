@@ -14,7 +14,7 @@ using TradingClient.Exchanges.Gate.WebSocket;
 
 namespace TradingClient.Exchanges.Gate;
 
-public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccountService, ISpotTrading, IAsyncDisposable
+public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccountService, ISpotTrading, IFuturesTrading, IAsyncDisposable
 {
     public const string DefaultBaseUrl = "https://api.gateio.ws";
     public const string DefaultWsUrl = "wss://api.gateio.ws/ws/v4/";
@@ -29,6 +29,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private readonly GateCredentials? _credentials;
     // Gate 现货下单+改单合计限频 10r/s，令牌桶宁保守勿激进（§7）
     private readonly TokenBucketRateLimiter _spotRateLimiter;
+    // Gate 期货下单+改单合计限频 100r/s/UID（撤单 200r/s，保守共用 100r/s 桶）
+    private readonly TokenBucketRateLimiter _futuresRateLimiter;
     // 测试注入点：鉴权链路的内层 handler 桩，生产为 null（GateAuthHandler 默认 HttpClientHandler）
     private readonly HttpMessageHandler? _authInnerHandler;
     // 张→币换算（§7）所需的 quanto_multiplier 缓存：合约名（如 BTC_USDT）→ 乘数，拉 contracts 时顺手填充
@@ -52,6 +54,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         GateCredentials? credentials = null,
         HttpMessageHandler? authInnerHandler = null,
         TokenBucketRateLimiter? spotRateLimiter = null,
+        TokenBucketRateLimiter? futuresRateLimiter = null,
         Uri? futuresWsEndpoint = null,
         Func<IWsTransport>? futuresWsTransportFactory = null)
     {
@@ -60,6 +63,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         _credentials = credentials;
         _authInnerHandler = authInnerHandler;
         _spotRateLimiter = spotRateLimiter ?? new TokenBucketRateLimiter(capacity: 10, refillPerSecond: 10);
+        _futuresRateLimiter = futuresRateLimiter ?? new TokenBucketRateLimiter(capacity: 100, refillPerSecond: 100);
         _wsClient = new GateSpotWsClient(wsEndpoint, wsTransportFactory, SetConnectionState, ReconnectAsync, wsPingInterval, credentials, _timeSync);
         _futuresWsClient = new GateFuturesWsClient(
             futuresWsEndpoint ?? new Uri(DefaultFuturesWsUrl),
@@ -307,6 +311,115 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         return Result.Success();
     }
 
+    public IObservable<PositionUpdate> PositionUpdates =>
+        throw new NotImplementedException(); // 下一刀接期货私有 WS 时实现
+
+    public IObservable<LiquidationWarning> LiquidationWarnings =>
+        throw new NotImplementedException(); // 同上
+
+    public async Task<Result<FuturesOrder>> PlaceFuturesOrderAsync(PlaceFuturesOrderRequest req, CancellationToken ct)
+    {
+        if (req.Quantity <= 0)
+            return Result.Failure<FuturesOrder>(new ExchangeError("INVALID_QUANTITY", "Quantity must be positive."));
+        if (req is { Type: OrderType.Limit, Price: null })
+            return Result.Failure<FuturesOrder>(new ExchangeError("MISSING_PRICE", "Limit order requires a price."));
+        var perp = RequirePerpetual(req.Symbol);
+        if (_credentials is null)
+            return Result.Failure<FuturesOrder>(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        var contract = GateSymbolFormatter.FormatFutures(perp);
+        await EnsureFuturesContractsCachedAsync(ct);
+        var multiplier = GetQuantoMultiplier(contract);
+
+        // 币→张换算（§7 数量语义）：本层是兜底校验，用例层已按 StepSize=1张×multiplier 对齐（§4.2）。
+        // enable_decimal=false 张数为整数；不整除与张数超 long 范围同属 INVALID_QUANTITY
+        var contractsDecimal = req.Quantity / multiplier;
+        if (contractsDecimal != decimal.Truncate(contractsDecimal) || contractsDecimal > long.MaxValue)
+            return Result.Failure<FuturesOrder>(new ExchangeError(
+                "INVALID_QUANTITY",
+                $"Quantity {req.Quantity} is not a whole number of contracts (quanto multiplier {multiplier})."));
+
+        var contracts = (long)contractsDecimal;
+        // size 带符号：正=买/开多，负=卖/开空
+        var signedSize = req.Side == OrderSide.Buy ? contracts : -contracts;
+
+        // Gate 杠杆挂在持仓维度而非订单维度（协议形态）：req.Leverage 有值时先 set_leverage 再下单；
+        // 为 null 则不动账户当前杠杆。双向持仓（dual）走 set_position_mode + auto_size，留待后续切片（testnet 默认 single）
+        if (req.Leverage is { } leverage)
+        {
+            var leverageResult = await SendSetLeverageAsync(contract, leverage, req.MarginMode, ct);
+            if (!leverageResult.IsSuccess)
+                return Result.Failure<FuturesOrder>(leverageResult.Error!);
+        }
+
+        await _futuresRateLimiter.WaitAsync(ct);
+
+        var body = new GateFuturesOrderRequest(
+            contract,
+            signedSize,
+            // 市价单协议形态：price "0" + tif ioc；限价单默认 gtc
+            req.Type == OrderType.Limit ? req.Price!.Value.ToString(CultureInfo.InvariantCulture) : "0",
+            req.Type == OrderType.Limit ? "gtc" : "ioc");
+
+        using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
+            "api/v4/futures/usdt/orders", body, GateJsonContext.Default.GateFuturesOrderRequest, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure<FuturesOrder>(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        var order = await response.Content.ReadFromJsonAsync(GateJsonContext.Default.GateFuturesOrder, ct);
+        return Result.Success(ToFuturesOrder(order!, req.MarginMode, multiplier));
+    }
+
+    public async Task<Result> SetLeverageAsync(Symbol symbol, int leverage, MarginMode mode, CancellationToken ct)
+    {
+        var perp = RequirePerpetual(symbol);
+        if (_credentials is null)
+            return Result.Failure(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        return await SendSetLeverageAsync(GateSymbolFormatter.FormatFutures(perp), leverage, mode, ct);
+    }
+
+    // 新接口（margin_mode 显式指定全/逐仓）；旧接口 leverage=0 表全仓是语义陷阱，不用
+    private async Task<Result> SendSetLeverageAsync(string contract, int leverage, MarginMode mode, CancellationToken ct)
+    {
+        var marginMode = mode switch
+        {
+            MarginMode.Cross => "cross",
+            MarginMode.Isolated => "isolated",
+            // PortfolioMargin 为 Domain 预留枚举值，Gate 无对应模式，属编程错误而非业务失败
+            _ => throw new ArgumentException($"Gate does not support margin mode {mode}.", nameof(mode)),
+        };
+
+        await _futuresRateLimiter.WaitAsync(ct);
+
+        using var response = await AuthenticatedHttpClient.PostAsync(
+            $"api/v4/futures/usdt/positions/{contract}/set_leverage?leverage={leverage}&margin_mode={marginMode}",
+            content: null, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        return Result.Success();
+    }
+
+    public async Task<Result<IReadOnlyList<Position>>> GetPositionsAsync(CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure<IReadOnlyList<Position>>(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        await EnsureFuturesContractsCachedAsync(ct);
+
+        // holding=true 只返回实际持仓
+        using var response = await AuthenticatedHttpClient.GetAsync("api/v4/futures/usdt/positions?holding=true", ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure<IReadOnlyList<Position>>(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        var dtos = await response.Content.ReadFromJsonAsync(GateJsonContext.Default.GateFuturesPositionArray, ct) ?? [];
+        return Result.Success<IReadOnlyList<Position>>(dtos.Select(ToPosition).ToArray());
+    }
+
     public async ValueTask DisposeAsync()
     {
         _authenticatedHttpClient?.Dispose();
@@ -318,6 +431,71 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     private static SpotSymbol RequireSpot(Symbol symbol) =>
         symbol as SpotSymbol
         ?? throw new NotSupportedException($"Gate spot trading does not support symbol type {symbol.GetType().Name}.");
+
+    // 本刀只接 usdt 永续；交割合约是另一族端点（/delivery/...），不接
+    private static PerpetualFuturesSymbol RequirePerpetual(Symbol symbol) =>
+        symbol as PerpetualFuturesSymbol
+        ?? throw new NotSupportedException($"Gate futures trading does not support symbol type {symbol.GetType().Name}.");
+
+    private static FuturesOrder ToFuturesOrder(GateFuturesOrder dto, MarginMode marginMode, decimal multiplier)
+    {
+        var size = Math.Abs(dto.Size);
+        var filled = size - Math.Abs(dto.Left);
+        // 市价单协议形态 price "0" → 领域 Price=null（Gate 现货同款处理）
+        var isMarket = dto.Price is null or "0";
+
+        // status 两态：open 按 left 细分；finished 看 finish_as，ioc/liquidated 等非 filled 一律归 Cancelled（部分成交体现在 FilledQuantity）
+        var status = dto.Status switch
+        {
+            "open" => filled > 0 ? OrderStatus.PartiallyFilled : OrderStatus.New,
+            "finished" => dto.FinishAs switch
+            {
+                "filled" => OrderStatus.Filled,
+                "cancelled" or "liquidated" or "ioc" or "auto_deleveraged" or "reduce_only"
+                    or "position_closed" or "reduce_out" or "stp" => OrderStatus.Cancelled,
+                // 未知 finish_as 视为协议漂移（系统故障），不走 Result
+                _ => throw new NotSupportedException($"Unknown Gate futures order finish_as '{dto.FinishAs}'."),
+            },
+            _ => throw new NotSupportedException($"Unknown Gate futures order status '{dto.Status}'."),
+        };
+
+        var side = dto.Size > 0 ? OrderSide.Buy : OrderSide.Sell;
+        return new FuturesOrder(
+            dto.Id.ToString(CultureInfo.InvariantCulture),
+            GateSymbolFormatter.ParseFutures(dto.Contract),
+            side,
+            isMarket ? OrderType.Market : OrderType.Limit,
+            isMarket ? null : decimal.Parse(dto.Price!, CultureInfo.InvariantCulture),
+            size * multiplier,
+            filled * multiplier,
+            status,
+            // 单向持仓模式（single）下持仓方向由 size 符号决定；双向持仓留待后续切片
+            side == OrderSide.Buy ? PositionSide.Long : PositionSide.Short,
+            marginMode,
+            // create_time 为秒（可小数）
+            DateTimeOffset.FromUnixTimeMilliseconds((long)(dto.CreateTime * 1000)));
+    }
+
+    private Position ToPosition(GateFuturesPosition dto)
+    {
+        var multiplier = GetQuantoMultiplier(dto.Contract);
+        // leverage "0"=全仓（实际杠杆上限看 cross_leverage_limit），非 0=逐仓杠杆
+        var isCross = dto.Leverage == "0";
+        var leverage = isCross
+            ? int.TryParse(dto.CrossLeverageLimit, NumberStyles.Integer, CultureInfo.InvariantCulture, out var crossLimit)
+                ? crossLimit
+                : 0 // cross_leverage_limit 解析失败时取 0（未知），不阻断持仓映射
+            : int.Parse(dto.Leverage, CultureInfo.InvariantCulture);
+
+        return new Position(
+            GateSymbolFormatter.ParseFutures(dto.Contract),
+            dto.Size > 0 ? PositionSide.Long : PositionSide.Short,
+            Math.Abs(dto.Size) * multiplier,
+            decimal.Parse(dto.EntryPrice, CultureInfo.InvariantCulture),
+            decimal.Parse(dto.UnrealisedPnl, CultureInfo.InvariantCulture),
+            leverage,
+            isCross ? MarginMode.Cross : MarginMode.Isolated);
+    }
 
     private static SpotOrder ToSpotOrder(GateSpotOrder dto)
     {
