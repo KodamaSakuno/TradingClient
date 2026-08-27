@@ -48,6 +48,13 @@ public enum PositionSide
     Both,
 }
 
+/// <summary>持仓模式；Gate 的 dual_plus（split position）预留不实现</summary>
+public enum PositionMode
+{
+    Single,
+    Dual,
+}
+
 public enum ConnectionState
 {
     Disconnected,

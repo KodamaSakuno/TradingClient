@@ -24,7 +24,7 @@ static void Log(string step, string message) =>
 
 // ---------- 期货 testnet 全链路模式：--futures 分流到 FuturesSmoke，以下现货流程不受影响 ----------
 if (args.Contains("--futures"))
-    return await FuturesSmoke.RunAsync();
+    return await FuturesSmoke.RunAsync(args.Contains("--dual"));
 
 // ---------- 1. 凭证 ----------
 var apiKey = Environment.GetEnvironmentVariable("GATE_TESTNET_API_KEY");

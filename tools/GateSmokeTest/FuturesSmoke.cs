@@ -23,7 +23,7 @@ internal static class FuturesSmoke
     private static void Log(string step, string message) =>
         Console.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [{step}] {message}");
 
-    public static async Task<int> RunAsync()
+    public static async Task<int> RunAsync(bool dualMode)
     {
         // ---------- 1. 凭证 ----------
         var apiKey = Environment.GetEnvironmentVariable("GATE_TESTNET_API_KEY");
@@ -41,6 +41,7 @@ internal static class FuturesSmoke
 
                 流程: 连接 testnet -> BTC_USDT 永续 instruments -> ticker -> 订阅持仓私有推送
                       -> 设杠杆 10x 全仓 -> 限价吃 ask1 开多 -> 持仓确认 -> 限价吃 bid1 平仓 -> 复查持仓归零
+                选项: --dual  双向持仓链路：切 dual -> 开多开空 -> 双腿验证 -> 全平 -> 复查归零（finally 复原 single）
                 """);
             return 2;
         }
@@ -157,6 +158,10 @@ internal static class FuturesSmoke
             Log("WS状态", "等待连接超时");
             return 1;
         }
+
+        // ---------- 6-dual. --dual 分流：双向持仓链路（finally 复原 single），以下为单向持仓流程 ----------
+        if (dualMode)
+            return await RunDualFlowAsync(connector, httpClient, symbol, contract, instrument.MinQuantity);
 
         // ---------- 6. 设杠杆 10x 全仓 ----------
         var leverage = await connector.SetLeverageAsync(symbol, 10, MarginMode.Cross, CancellationToken.None);
@@ -283,6 +288,135 @@ internal static class FuturesSmoke
 
         Log("结果", failed ? "冒烟测试未全部通过" : "全链路通过");
         return failed ? 1 : 0;
+    }
+
+    // ---------- 双向持仓（dual）链路：--futures --dual ----------
+    // 切 dual → 吃 ask1 开多 → 吃 bid1 开空 → REST 验证两腿 → 反向单 reduce_only 全平 → REST 复查归零
+    // 持仓模式是账户级状态，无论成败 finally 都复原 single，避免账户滞留 dual
+    private static async Task<int> RunDualFlowAsync(
+        GateConnector connector, HttpClient httpClient,
+        PerpetualFuturesSymbol symbol, string contract, decimal quantity)
+    {
+        var failed = false;
+
+        var setDual = await connector.SetPositionModeAsync(PositionMode.Dual, CancellationToken.None);
+        if (!setDual.IsSuccess)
+        {
+            Log("持仓模式", $"切 dual 失败：[{setDual.Error!.Code}] {setDual.Error.Message}");
+            return 1;
+        }
+        Log("持仓模式", "OK：已切换为 dual（双向持仓）");
+
+        try
+        {
+            // 开两腿：Long+Buy 加多、Short+Sell 加空（taker 限价单，吃对手价）
+            if (!await PlaceTakerAsync(connector, httpClient, symbol, contract, PositionSide.Long, OrderSide.Buy, quantity, "开多"))
+                failed = true;
+            if (!await PlaceTakerAsync(connector, httpClient, symbol, contract, PositionSide.Short, OrderSide.Sell, quantity, "开空"))
+                failed = true;
+
+            // REST 轮询验证两腿都在（dual 模式 positions 返回 dual_long/dual_short 两条）
+            var legsOk = await WaitForPositionsAsync(connector, symbol,
+                legs => legs.Any(p => p.Side == PositionSide.Long) && legs.Any(p => p.Side == PositionSide.Short),
+                "持仓验证");
+            if (legsOk)
+            {
+                Log("持仓验证", $"OK：{contract} Long/Short 两腿持仓都在");
+
+                // 平仓：Long+Sell 减多、Short+Buy 减空（适配器在 dual 下自动带 reduce_only）
+                if (!await PlaceTakerAsync(connector, httpClient, symbol, contract, PositionSide.Long, OrderSide.Sell, quantity, "平多"))
+                    failed = true;
+                if (!await PlaceTakerAsync(connector, httpClient, symbol, contract, PositionSide.Short, OrderSide.Buy, quantity, "平空"))
+                    failed = true;
+
+                if (await WaitForPositionsAsync(connector, symbol, legs => legs.Count == 0, "复查"))
+                    Log("复查", $"OK：{contract} 两腿持仓已归零");
+                else
+                {
+                    Log("复查", "未确认持仓归零");
+                    failed = true;
+                }
+            }
+            else
+            {
+                Log("持仓验证", "未确认两腿持仓，跳过平仓");
+                failed = true;
+            }
+        }
+        finally
+        {
+            var restore = await connector.SetPositionModeAsync(PositionMode.Single, CancellationToken.None);
+            if (restore.IsSuccess)
+            {
+                Log("持仓模式", "已复原 single");
+            }
+            else
+            {
+                Log("持仓模式", $"复原 single 失败：[{restore.Error!.Code}] {restore.Error.Message}（账户可能滞留 dual，需手工处理）");
+                failed = true;
+            }
+        }
+
+        Log("结果", failed ? "双向持仓冒烟未全部通过" : "双向持仓全链路通过");
+        return failed ? 1 : 0;
+    }
+
+    // taker 限价单：买单吃 ask1、卖单吃 bid1（同单向流程，不用市价单的原因见文件头注释）
+    private static async Task<bool> PlaceTakerAsync(
+        GateConnector connector, HttpClient httpClient,
+        PerpetualFuturesSymbol symbol, string contract,
+        PositionSide side, OrderSide orderSide, decimal quantity, string step)
+    {
+        decimal price;
+        try
+        {
+            var best = await GetBestPriceAsync(httpClient, contract, orderSide);
+            if (best is null)
+            {
+                Log(step, "失败：盘口对应侧为空");
+                return false;
+            }
+            price = best.Value;
+        }
+        catch (Exception ex)
+        {
+            Log(step, $"失败：取盘口异常 {ex.Message}");
+            return false;
+        }
+
+        Log(step, $"请求：Limit {orderSide} {contract} Price={price.ToString(CultureInfo.InvariantCulture)}（盘口{(orderSide == OrderSide.Buy ? " ask1" : " bid1")}）Quantity={quantity.ToString(CultureInfo.InvariantCulture)} PositionSide={side}");
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(symbol, orderSide, OrderType.Limit, price, quantity, side, MarginMode.Cross, Leverage: null),
+            CancellationToken.None);
+        if (!result.IsSuccess)
+        {
+            Log(step, $"失败：[{result.Error!.Code}] {result.Error.Message}");
+            return false;
+        }
+        Log(step, $"OK：OrderId={result.Value!.OrderId} Status={result.Value.Status}");
+        return true;
+    }
+
+    // REST 轮询持仓直到谓词满足（taker 单成交后持仓落库有短暂延迟）；legs 只含本 symbol 的有效持仓
+    private static async Task<bool> WaitForPositionsAsync(
+        GateConnector connector, PerpetualFuturesSymbol symbol,
+        Func<IReadOnlyList<Position>, bool> predicate, string step)
+    {
+        var deadline = DateTimeOffset.Now + TimeSpan.FromSeconds(10);
+        while (DateTimeOffset.Now < deadline)
+        {
+            var positions = await connector.GetPositionsAsync(CancellationToken.None);
+            if (!positions.IsSuccess)
+            {
+                Log(step, $"失败：[{positions.Error!.Code}] {positions.Error.Message}");
+                return false;
+            }
+            var legs = positions.Value!.Where(p => p.Symbol.Equals(symbol) && p.Quantity > 0).ToArray();
+            if (predicate(legs))
+                return true;
+            await Task.Delay(500);
+        }
+        return false;
     }
 
     // 取盘口最优对手价：买单吃 ask1，卖单吃 bid1；对应侧为空或价格无效返回 null

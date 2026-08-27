@@ -11,4 +11,5 @@ public enum AccountMode
 public sealed record ExchangeCapabilities(
     AccountMode AccountMode,
     bool RequiresInternalTransfers,
-    IReadOnlyList<ProductKind> Products);
+    IReadOnlyList<ProductKind> Products,
+    bool SupportsDualPositionMode = false);

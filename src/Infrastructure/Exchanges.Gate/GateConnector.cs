@@ -36,6 +36,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     // 张→币换算（§7）所需的 quanto_multiplier 缓存：合约名（如 BTC_USDT）→ 乘数，拉 contracts 时顺手填充
     private readonly ConcurrentDictionary<string, decimal> _futuresQuantoMultipliers = new();
     private readonly SemaphoreSlim _futuresContractsLock = new(1, 1);
+    // 持仓模式是账户级状态：本地缓存供下单映射（reduce_only 分支）用；站外改模式（网页/App）会失准
+    private PositionMode _positionMode = PositionMode.Single;
 
     private HttpClient? _authenticatedHttpClient;
 
@@ -84,7 +86,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
     public override ExchangeCapabilities Capabilities { get; } = new(
         AccountMode.Classic,
         RequiresInternalTransfers: true,
-        Products: [ProductKind.Spot, ProductKind.Futures]);
+        Products: [ProductKind.Spot, ProductKind.Futures],
+        SupportsDualPositionMode: true);
 
     public override async Task ConnectAsync(CancellationToken ct)
     {
@@ -348,11 +351,29 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
                 $"Quantity {req.Quantity} is not a whole number of contracts (quanto multiplier {multiplier})."));
 
         var contracts = (long)contractsDecimal;
-        // size 带符号：正=买/开多，负=卖/开空
+
+        // 下单 size/reduce_only 按持仓模式分支（协议约定出自 Place futures order 文档）：
+        // single：size 带符号，正=买/开多、负=卖/开空，反向单即平仓，不带 reduce_only
+        // dual：加仓 size 正=加多/负=加空；减仓 reduce_only=true，size 正（买）=减空、负（卖）=减多。
+        // 全平的 size=0 + auto_size=close_long/close_short 形态不接，用 reduce_only + 显式数量即可
         var signedSize = req.Side == OrderSide.Buy ? contracts : -contracts;
+        bool? reduceOnly = null;
+        if (_positionMode == PositionMode.Dual)
+        {
+            (signedSize, reduceOnly) = (req.PositionSide, req.Side) switch
+            {
+                (PositionSide.Long, OrderSide.Buy) => (contracts, (bool?)null),
+                (PositionSide.Short, OrderSide.Sell) => (-contracts, (bool?)null),
+                (PositionSide.Long, OrderSide.Sell) => (-contracts, (bool?)true),
+                (PositionSide.Short, OrderSide.Buy) => (contracts, (bool?)true),
+                // dual 下 Both 无目标腿，属编程错误而非业务失败
+                _ => throw new ArgumentException(
+                    $"Dual position mode requires PositionSide Long or Short, got {req.PositionSide}.", nameof(req)),
+            };
+        }
 
         // Gate 杠杆挂在持仓维度而非订单维度（协议形态）：req.Leverage 有值时先 set_leverage 再下单；
-        // 为 null 则不动账户当前杠杆。双向持仓（dual）走 set_position_mode + auto_size，留待后续切片（testnet 默认 single）
+        // 为 null 则不动账户当前杠杆
         if (req.Leverage is { } leverage)
         {
             var leverageResult = await SendSetLeverageAsync(contract, leverage, req.MarginMode, ct);
@@ -367,7 +388,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             signedSize,
             // 市价单协议形态：price "0" + tif ioc；限价单默认 gtc
             req.Type == OrderType.Limit ? req.Price!.Value.ToString(CultureInfo.InvariantCulture) : "0",
-            req.Type == OrderType.Limit ? "gtc" : "ioc");
+            req.Type == OrderType.Limit ? "gtc" : "ioc",
+            reduceOnly);
 
         using var response = await AuthenticatedHttpClient.PostAsJsonAsync(
             "api/v4/futures/usdt/orders", body, GateJsonContext.Default.GateFuturesOrderRequest, ct);
@@ -375,7 +397,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             return Result.Failure<FuturesOrder>(await GateErrorMapper.FromResponseAsync(response, ct));
 
         var order = await response.Content.ReadFromJsonAsync(GateJsonContext.Default.GateFuturesOrder, ct);
-        return Result.Success(ToFuturesOrder(order!, req.MarginMode, multiplier));
+        return Result.Success(ToFuturesOrder(order!, req.PositionSide, req.MarginMode, multiplier));
     }
 
     public async Task<Result> SetLeverageAsync(Symbol symbol, int leverage, MarginMode mode, CancellationToken ct)
@@ -386,6 +408,25 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
                 "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
 
         return await SendSetLeverageAsync(GateSymbolFormatter.FormatFutures(perp), leverage, mode, ct);
+    }
+
+    // 持仓模式为账户级开关（无合约维度）；dual_plus（split position）不接
+    public async Task<Result> SetPositionModeAsync(PositionMode mode, CancellationToken ct)
+    {
+        if (_credentials is null)
+            return Result.Failure(new ExchangeError(
+                "MISSING_CREDENTIALS", "Gate authenticated endpoints require credentials."));
+
+        await _futuresRateLimiter.WaitAsync(ct);
+
+        using var response = await AuthenticatedHttpClient.PostAsync(
+            $"api/v4/futures/usdt/set_position_mode?position_mode={(mode == PositionMode.Dual ? "dual" : "single")}",
+            content: null, ct);
+        if (!response.IsSuccessStatusCode)
+            return Result.Failure(await GateErrorMapper.FromResponseAsync(response, ct));
+
+        _positionMode = mode;
+        return Result.Success();
     }
 
     // 新接口（margin_mode 显式指定全/逐仓）；旧接口 leverage=0 表全仓是语义陷阱，不用
@@ -444,7 +485,7 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
         symbol as PerpetualFuturesSymbol
         ?? throw new NotSupportedException($"Gate futures trading does not support symbol type {symbol.GetType().Name}.");
 
-    private static FuturesOrder ToFuturesOrder(GateFuturesOrder dto, MarginMode marginMode, decimal multiplier)
+    private static FuturesOrder ToFuturesOrder(GateFuturesOrder dto, PositionSide positionSide, MarginMode marginMode, decimal multiplier)
     {
         var size = Math.Abs(dto.Size);
         var filled = size - Math.Abs(dto.Left);
@@ -476,8 +517,8 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
             size * multiplier,
             filled * multiplier,
             status,
-            // 单向持仓模式（single）下持仓方向由 size 符号决定；双向持仓留待后续切片
-            side == OrderSide.Buy ? PositionSide.Long : PositionSide.Short,
+            // PositionSide 从请求传入而非按 size 符号推导：dual 减持单方向与目标腿相反（Buy 减空 → Short）
+            positionSide,
             marginMode,
             // create_time 为秒（可小数）
             DateTimeOffset.FromUnixTimeMilliseconds((long)(dto.CreateTime * 1000)));
@@ -496,7 +537,13 @@ public sealed class GateConnector : ExchangeConnectorBase, IMarketData, IAccount
 
         return new Position(
             GateSymbolFormatter.ParseFutures(dto.Contract),
-            dto.Size > 0 ? PositionSide.Long : PositionSide.Short,
+            // dual 模式按 mode 字段定腿；single 及其他按 size 符号（WS 侧同款映射见 GateFuturesWsClient）
+            dto.Mode switch
+            {
+                "dual_long" => PositionSide.Long,
+                "dual_short" => PositionSide.Short,
+                _ => dto.Size > 0 ? PositionSide.Long : PositionSide.Short,
+            },
             Math.Abs(dto.Size) * multiplier,
             decimal.Parse(dto.EntryPrice, CultureInfo.InvariantCulture),
             decimal.Parse(dto.UnrealisedPnl, CultureInfo.InvariantCulture),

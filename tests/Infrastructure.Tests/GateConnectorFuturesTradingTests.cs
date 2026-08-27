@@ -84,6 +84,29 @@ public class GateConnectorFuturesTradingTests
         ]
         """;
 
+    private const string DualPositionsJson = """
+        [
+          {
+            "contract": "BTC_USDT",
+            "size": "200",
+            "entry_price": "79000.5",
+            "unrealised_pnl": "20.01",
+            "leverage": "0",
+            "cross_leverage_limit": "25",
+            "mode": "dual_long"
+          },
+          {
+            "contract": "BTC_USDT",
+            "size": "-50",
+            "entry_price": "80500",
+            "unrealised_pnl": "-1.25",
+            "leverage": "10",
+            "cross_leverage_limit": "0",
+            "mode": "dual_short"
+          }
+        ]
+        """;
+
     private static readonly PerpetualFuturesSymbol BtcUsdt = new("BTC", "USDT");
 
     [Fact]
@@ -356,6 +379,171 @@ public class GateConnectorFuturesTradingTests
         Assert.Equal(MarginMode.Isolated, shortPosition.MarginMode);
         Assert.Equal(10, shortPosition.Leverage);
         Assert.Equal(-1.25m, shortPosition.UnrealizedPnl);
+    }
+
+    [Fact]
+    public async Task SetPositionModeAsync_SendsExpectedPathAndQuery()
+    {
+        var connector = CreateConnector(_ => OkJson("{}"), out var captured);
+
+        var result = await connector.SetPositionModeAsync(PositionMode.Dual, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var (request, _) = Assert.Single(captured.Requests);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("/api/v4/futures/usdt/set_position_mode", request.RequestUri!.AbsolutePath);
+        Assert.Equal("position_mode=dual", request.RequestUri.Query.TrimStart('?'));
+    }
+
+    [Fact]
+    public async Task SetPositionModeAsync_WithoutCredentials_ReturnsMissingCredentialsFailure()
+    {
+        var connector = new GateConnector(
+            new HttpClient(new StubHttpMessageHandler(_ => OkJson(ContractsJson))),
+            GateConnector.DefaultBaseUrl,
+            new Uri(GateConnector.DefaultWsUrl),
+            wsTransportFactory: () => throw new InvalidOperationException());
+
+        var result = await connector.SetPositionModeAsync(PositionMode.Dual, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("MISSING_CREDENTIALS", result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task SetPositionModeAsync_WithRejection_ReturnsLabelCodedFailure()
+    {
+        const string errorJson = """{"label":"POSITION_MODE_INVALID","message":"Invalid position mode"}""";
+        var connector = CreateConnector(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(errorJson, Encoding.UTF8, "application/json"),
+        }, out _);
+
+        var result = await connector.SetPositionModeAsync(PositionMode.Dual, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("POSITION_MODE_INVALID", result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_InSingleMode_OmitsReduceOnly()
+    {
+        var connector = CreateConnector(_ => CreatedJson(OpenOrderJson), out var captured);
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Sell, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Short, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(-100, json.RootElement.GetProperty("size").GetInt64());
+        Assert.False(json.RootElement.TryGetProperty("reduce_only", out _));
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_DualLongBuy_SendsPositiveSizeWithoutReduceOnly()
+    {
+        var (connector, captured) = await CreateDualConnectorAsync();
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Buy, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Long, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(PositionSide.Long, result.Value!.PositionSide);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(100, json.RootElement.GetProperty("size").GetInt64());
+        Assert.False(json.RootElement.TryGetProperty("reduce_only", out _));
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_DualShortSell_SendsNegativeSizeWithoutReduceOnly()
+    {
+        var (connector, captured) = await CreateDualConnectorAsync();
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Sell, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Short, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(PositionSide.Short, result.Value!.PositionSide);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(-100, json.RootElement.GetProperty("size").GetInt64());
+        Assert.False(json.RootElement.TryGetProperty("reduce_only", out _));
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_DualLongSell_SendsNegativeSizeWithReduceOnly()
+    {
+        var (connector, captured) = await CreateDualConnectorAsync();
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Sell, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Long, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(PositionSide.Long, result.Value!.PositionSide);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(-100, json.RootElement.GetProperty("size").GetInt64());
+        Assert.True(json.RootElement.GetProperty("reduce_only").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PlaceFuturesOrderAsync_DualShortBuy_SendsPositiveSizeWithReduceOnlyAndMapsSideFromRequest()
+    {
+        var (connector, captured) = await CreateDualConnectorAsync();
+
+        var result = await connector.PlaceFuturesOrderAsync(
+            new PlaceFuturesOrderRequest(BtcUsdt, OrderSide.Buy, OrderType.Limit, 79_000m, 0.01m,
+                PositionSide.Short, MarginMode.Cross, Leverage: null),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        // dual 减持单方向与目标腿相反（Buy 减空）：PositionSide 从请求传入而非按 size 符号推导
+        Assert.Equal(PositionSide.Short, result.Value!.PositionSide);
+        Assert.Equal(OrderSide.Buy, result.Value.Side);
+        var (_, body) = Assert.Single(captured.Requests);
+        using var json = JsonDocument.Parse(body!);
+        Assert.Equal(100, json.RootElement.GetProperty("size").GetInt64());
+        Assert.True(json.RootElement.GetProperty("reduce_only").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GetPositionsAsync_WithDualModes_MapsSidesFromModeField()
+    {
+        var connector = CreateConnector(_ => OkJson(DualPositionsJson), out _);
+
+        var result = await connector.GetPositionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var positions = result.Value!;
+        Assert.Equal(2, positions.Count);
+        Assert.Equal(PositionSide.Long, positions[0].Side);
+        Assert.Equal(0.02m, positions[0].Quantity);
+        Assert.Equal(PositionSide.Short, positions[1].Side);
+        Assert.Equal(0.005m, positions[1].Quantity);
+    }
+
+    // 构造已切到 dual 的连接器：set_position_mode 走桩成功，本地缓存生效后清掉该请求记录，便于断言下单体
+    private static async Task<(GateConnector Connector, CapturingHandler Captured)> CreateDualConnectorAsync()
+    {
+        var connector = CreateConnector(
+            req => req.RequestUri!.AbsolutePath.Contains("set_position_mode")
+                ? OkJson("{}")
+                : CreatedJson(OpenOrderJson),
+            out var captured);
+        var result = await connector.SetPositionModeAsync(PositionMode.Dual, TestContext.Current.CancellationToken);
+        Assert.True(result.IsSuccess);
+        captured.Requests.Clear();
+        return (connector, captured);
     }
 
     private static GateConnector CreateConnector(

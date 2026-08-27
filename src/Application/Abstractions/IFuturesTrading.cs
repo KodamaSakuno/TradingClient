@@ -10,6 +10,8 @@ public interface IFuturesTrading : IExchangeConnector
 
     Task<Result> SetLeverageAsync(Symbol symbol, int leverage, MarginMode mode, CancellationToken ct);
 
+    Task<Result> SetPositionModeAsync(PositionMode mode, CancellationToken ct);
+
     Task<Result<IReadOnlyList<Position>>> GetPositionsAsync(CancellationToken ct);
 
     IObservable<PositionUpdate> PositionUpdates { get; }

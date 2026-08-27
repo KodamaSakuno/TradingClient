@@ -14,5 +14,5 @@ internal sealed record GateFuturesPosition(
     string UnrealisedPnl,
     string Leverage,
     string? CrossLeverageLimit,
-    // single / dual_long / dual_short（本刀只支持 single）
+    // single / dual_long / dual_short；REST 侧据此映射 PositionSide（WS 侧同款映射见 GateFuturesPositionUpdate）
     string Mode);

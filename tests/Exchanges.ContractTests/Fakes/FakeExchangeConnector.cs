@@ -149,6 +149,11 @@ public sealed class FakeExchangeConnector(AccountMode mode)
             : Result.Failure(new ExchangeError("INVALID_LEVERAGE", "Leverage must be positive.")));
     }
 
+    public Task<Result> SetPositionModeAsync(PositionMode mode, CancellationToken ct)
+    {
+        return Task.FromResult(Result.Success());
+    }
+
     public Task<Result<IReadOnlyList<Position>>> GetPositionsAsync(CancellationToken ct)
     {
         return Task.FromResult(Result.Success<IReadOnlyList<Position>>(_positions.ToArray()));
