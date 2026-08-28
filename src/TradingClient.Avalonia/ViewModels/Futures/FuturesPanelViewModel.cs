@@ -92,6 +92,18 @@ public sealed class FuturesPanelViewModel : ViewModelBase, IDisposable
 
     public ReadOnlyObservableCollection<Position> Positions { get; }
 
+    private decimal _netPosition;
+    public decimal NetPosition
+    {
+        get => _netPosition;
+        private set => this.RaiseAndSetIfChanged(ref _netPosition, value);
+    }
+
+    private void RecalculateNetPosition()
+    {
+        NetPosition = Positions.Sum(p => p.Side == PositionSide.Long ? p.Quantity : -p.Quantity);
+    }
+
     private PerpetualFuturesSymbol? _currentSymbol;
     public PerpetualFuturesSymbol? CurrentSymbol
     {
@@ -179,6 +191,7 @@ public sealed class FuturesPanelViewModel : ViewModelBase, IDisposable
             foreach (var p in result.Value!.Where(p => p.Quantity != 0))
                 update.AddOrUpdate(p);
         });
+        RecalculateNetPosition();
     }
 
     // Quantity==0 的推送视为平仓，移除该键
@@ -188,6 +201,7 @@ public sealed class FuturesPanelViewModel : ViewModelBase, IDisposable
             _positions.RemoveKey($"{position.Symbol.Raw}:{position.Side}");
         else
             _positions.AddOrUpdate(position);
+        RecalculateNetPosition();
     }
 
     private async Task ApplyLeverageAsync()

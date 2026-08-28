@@ -5,6 +5,7 @@ using Avalonia.Media;
 using ReactiveUI;
 using Serilog;
 using TradingClient.Application.Abstractions;
+using TradingClient.Application.Risk;
 using TradingClient.Application.UseCases.Futures;
 using TradingClient.Application.UseCases.Spot;
 using TradingClient.Domain.Instruments;
@@ -21,6 +22,11 @@ namespace TradingClient.Avalonia.ViewModels.Shared;
 /// </summary>
 public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
 {
+    private static readonly IBrush BuyColor = new SolidColorBrush(Color.Parse("#0DBF5C"));
+    private static readonly IBrush SellColor = new SolidColorBrush(Color.Parse("#FF5A67"));
+    private static readonly IBrush BuyInactiveColor = new SolidColorBrush(Color.Parse("#1A4330"));
+    private static readonly IBrush SellInactiveColor = new SolidColorBrush(Color.Parse("#4A2A2E"));
+
     private readonly PlaceSpotOrder _placeSpotOrder;
     private readonly PlaceFuturesOrder _placeFuturesOrder;
     private readonly ISpotTrading _spotFacade;
@@ -52,6 +58,8 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
                 {
                     _option = option;
                     IsFuturesProduct = option?.Product == ProductKind.Futures;
+                    SelectedSide = OrderSide.Buy;
+                    SelectedPositionSide = PositionSide.Long;
                 },
                 ex => logger.Error(ex, "Ticket connector stream faulted"))
             .DisposeWith(_subscriptions);
@@ -65,6 +73,29 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
         submit.ThrownExceptions
             .Subscribe(ex => logger.Error(ex, "Order submit faulted"))
             .DisposeWith(_subscriptions);
+
+        SelectBuy = CreateCommand(() => SelectedSide = OrderSide.Buy);
+        SelectSell = CreateCommand(() => SelectedSide = OrderSide.Sell);
+        SetBestPrice = CreateCommand(() =>
+        {
+            if (BestPrice > 0)
+                PriceText = BestPrice.ToString("G29");
+        });
+        SetQuantityPercent = ReactiveCommand.Create<decimal>(percent =>
+        {
+            var price = SelectedType == OrderType.Limit && decimal.TryParse(PriceText, out var p) && p > 0
+                ? p
+                : BestPrice;
+            if (price <= 0 || AvailableQuote <= 0)
+                return;
+
+            var notional = AvailableQuote * percent;
+            if (IsFuturesProduct && int.TryParse(LeverageText, out var leverage) && leverage > 0)
+                notional *= leverage;
+
+            var qty = notional / price;
+            QuantityText = qty.ToString("G29");
+        });
     }
 
     public IReadOnlyList<OrderSide> Sides { get; } = [OrderSide.Buy, OrderSide.Sell];
@@ -76,7 +107,14 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
     public OrderSide SelectedSide
     {
         get => _selectedSide;
-        set => this.RaiseAndSetIfChanged(ref _selectedSide, value);
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedSide, value);
+            this.RaisePropertyChanged(nameof(BuyButtonBackground));
+            this.RaisePropertyChanged(nameof(SellButtonBackground));
+            this.RaisePropertyChanged(nameof(IsBuyEnabled));
+            this.RaisePropertyChanged(nameof(IsSellEnabled));
+        }
     }
 
     private OrderType _selectedType = OrderType.Limit;
@@ -117,8 +155,107 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
     public bool IsFuturesProduct
     {
         get => _isFuturesProduct;
-        private set => this.RaiseAndSetIfChanged(ref _isFuturesProduct, value);
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _isFuturesProduct, value);
+            this.RaisePropertyChanged(nameof(AvailableText));
+            this.RaisePropertyChanged(nameof(MaxOpenText));
+            this.RaisePropertyChanged(nameof(IsBuyEnabled));
+            this.RaisePropertyChanged(nameof(IsSellEnabled));
+            this.RaisePropertyChanged(nameof(BuyButtonText));
+            this.RaisePropertyChanged(nameof(SellButtonText));
+        }
     }
+
+    private RiskState _riskState = RiskState.Normal;
+    public RiskState RiskState
+    {
+        get => _riskState;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _riskState, value);
+            this.RaisePropertyChanged(nameof(IsBuyEnabled));
+            this.RaisePropertyChanged(nameof(IsSellEnabled));
+            this.RaisePropertyChanged(nameof(RiskHintText));
+            this.RaisePropertyChanged(nameof(RiskHintBrush));
+        }
+    }
+
+    private decimal _netPosition;
+    public decimal NetPosition
+    {
+        get => _netPosition;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _netPosition, value);
+            this.RaisePropertyChanged(nameof(IsBuyEnabled));
+            this.RaisePropertyChanged(nameof(IsSellEnabled));
+        }
+    }
+
+    private decimal _availableQuote;
+    public decimal AvailableQuote
+    {
+        get => _availableQuote;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _availableQuote, value);
+            this.RaisePropertyChanged(nameof(AvailableText));
+            this.RaisePropertyChanged(nameof(MaxOpenText));
+        }
+    }
+
+    private decimal _bestPrice;
+    public decimal BestPrice
+    {
+        get => _bestPrice;
+        set => this.RaiseAndSetIfChanged(ref _bestPrice, value);
+    }
+
+    public string LeverageText => "10"; // 占位：与 FuturesPanel 杠杆保持同步需要额外 plumbing，先写死做演示
+
+    public IBrush BuyButtonBackground => SelectedSide == OrderSide.Buy ? BuyColor : BuyInactiveColor;
+    public IBrush SellButtonBackground => SelectedSide == OrderSide.Sell ? SellColor : SellInactiveColor;
+    public string BuyButtonText => IsFuturesProduct ? "开多" : "买入";
+    public string SellButtonText => IsFuturesProduct ? "开空" : "卖出";
+
+    public bool IsBuyEnabled =>
+        RiskState != RiskState.Locked &&
+        !(RiskState == RiskState.ReduceOnly && ((IsFuturesProduct && NetPosition >= 0) || !IsFuturesProduct));
+
+    public bool IsSellEnabled =>
+        RiskState != RiskState.Locked &&
+        !(RiskState == RiskState.ReduceOnly && IsFuturesProduct && NetPosition <= 0);
+
+    public string AvailableText => $"{AvailableQuote:N2} USDT";
+
+    public string MaxOpenText
+    {
+        get
+        {
+            var price = SelectedType == OrderType.Limit && decimal.TryParse(PriceText, out var p) && p > 0
+                ? p
+                : BestPrice;
+            if (price <= 0 || AvailableQuote <= 0)
+                return "— USDT";
+
+            var leverage = 1;
+            if (IsFuturesProduct && int.TryParse(LeverageText, out var l) && l > 0)
+                leverage = l;
+
+            var max = AvailableQuote * leverage / price;
+            return $"{max:G29}";
+        }
+    }
+
+    public string RiskHintText => RiskState switch
+    {
+        RiskState.Locked => "风控锁定：禁止下单",
+        RiskState.ReduceOnly => "风控 ReduceOnly：仅允许减仓方向",
+        _ => string.Empty,
+    };
+
+    public IBrush RiskHintBrush => RiskState == RiskState.Locked ? Brushes.Red : Brushes.DarkOrange;
 
     private string _resultText = string.Empty;
     public string ResultText
@@ -135,6 +272,33 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
     }
 
     public ICommand Submit { get; }
+    public ICommand SelectBuy { get; }
+    public ICommand SelectSell { get; }
+    public ICommand SetBestPrice { get; }
+    public ICommand SetQuantityPercent { get; }
+
+    private static ICommand CreateCommand(Action action)
+    {
+        var cmd = ReactiveCommand.Create(action);
+        cmd.ThrownExceptions.Subscribe(ex => { });
+        return cmd;
+    }
+
+    private async Task BuyAsync()
+    {
+        SelectedSide = OrderSide.Buy;
+        if (IsFuturesProduct)
+            SelectedPositionSide = PositionSide.Long;
+        await SubmitAsync();
+    }
+
+    private async Task SellAsync()
+    {
+        SelectedSide = OrderSide.Sell;
+        if (IsFuturesProduct)
+            SelectedPositionSide = PositionSide.Short;
+        await SubmitAsync();
+    }
 
     private async Task SubmitAsync()
     {

@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Windows.Input;
 using Avalonia.Media;
 using ReactiveUI;
 using Serilog;
@@ -80,19 +82,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         // 订单簿梯子（现货/合约共用）：同样跟随选择器与 Symbol 流，切换由 VM 内部退订重建
         OrderBook = new OrderBookViewModel(connectorSelection, _parsedSymbol, logger);
 
+        SelectPriceCommand = ReactiveCommand.Create<decimal>(price => OrderTicket.PriceText = price.ToString("G29"));
+
         WireConnectionStates(connectorSelection);
         WireQuoteStream(connectorSelection);
         WireConnectorActivation(connectorSelection);
         WireFuturesPanel(connectorSelection);
         WireOptionsLab();
         WireRiskState(riskStateMachine);
+        WireOrderTicketState(connectorSelection, riskStateMachine);
     }
 
     public IReadOnlyList<SelectorOption> SelectorOptions { get; }
 
+    public IReadOnlyList<string> SymbolSuggestions { get; } =
+    [
+        "BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "DOGE_USDT",
+        "BTC_USDT_PERP", "ETH_USDT_PERP", "SOL_USDT_PERP"
+    ];
+
     public OrderTicketViewModel OrderTicket { get; }
 
     public OrderBookViewModel OrderBook { get; }
+
+    public ICommand SelectPriceCommand { get; }
 
     private SelectorOption? _selectedOption;
     public SelectorOption? SelectedOption
@@ -273,6 +286,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             AccountSummary = error.Code == "MISSING_CREDENTIALS"
                 ? $"未配置 {exchangeId} 凭证（设置环境变量后重启）"
                 : $"余额加载失败：[{error.Code}] {error.Message}";
+            OrderTicket.AvailableQuote = 0m;
             _logger.Warning("Account load failed: [{ErrorCode}] {ErrorMessage}", error.Code, error.Message);
             return;
         }
@@ -281,6 +295,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
         foreach (var asset in result.Value!.Assets)
             Balances.Add(asset);
         AccountSummary = $"账户模式：{result.Value.Mode} · {result.Value.Assets.Count} 个币种";
+        OrderTicket.AvailableQuote = result.Value.AvailableMargin;
     }
 
     // 连接状态流 → 状态文本/颜色；推送在后台线程，ObserveOn 在 ViewModel 边界切回 UI 线程
@@ -318,6 +333,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                         ? new FuturesPanelViewModel(futures, _parsedSymbol, _logger)
                         : null;
                     IsFuturesSelected = FuturesPanel is not null;
+                    OrderTicket.NetPosition = 0m;
+
+                    if (FuturesPanel is null)
+                        return;
+
+                    // 持仓变化 → 推算净头寸（正=多，负=空），供 ReduceOnly 时 UI 禁用加仓方向
+                    FuturesPanel.WhenAnyValue(vm => vm.NetPosition)
+                        .Subscribe(net => OrderTicket.NetPosition = net, ex => _logger.Error(ex, "Net position stream faulted"))
+                        .DisposeWith(_subscriptions);
                 },
                 ex => _logger.Error(ex, "Futures panel stream faulted"))
             .DisposeWith(_subscriptions);
@@ -367,6 +391,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
                     BestBid = quote.BestBid.ToString("G29");
                     BestAsk = quote.BestAsk.ToString("G29");
                     QuoteTimestamp = quote.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff");
+                    OrderTicket.BestPrice = (quote.BestBid + quote.BestAsk) / 2m;
                 },
                 ex => _logger.Error(ex, "Quote stream faulted"))
             .DisposeWith(_subscriptions);
@@ -399,6 +424,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable
             RiskState.Locked => (Brushes.Red, FontWeight.Bold),
             _ => (Brushes.Gray, FontWeight.Normal),
         };
+    }
+
+    // 把风控状态推送给下单票：Locked 禁用全部方向，ReduceOnly 根据净头寸禁用加仓方向
+    private void WireOrderTicketState(IObservable<ConnectorOption?> connectorSelection, RiskStateMachine stateMachine)
+    {
+        OrderTicket.RiskState = stateMachine.Current;
+        stateMachine.Transitions
+            .ObserveOn(RxApp.MainThreadScheduler)
+            .Subscribe(t => OrderTicket.RiskState = t.To, ex => _logger.Error(ex, "Risk state to ticket stream faulted"))
+            .DisposeWith(_subscriptions);
+
+        connectorSelection
+            .Subscribe(
+                _ =>
+                {
+                    OrderTicket.RiskState = stateMachine.Current;
+                    OrderTicket.NetPosition = 0m;
+                    OrderTicket.AvailableQuote = 0m;
+                },
+                ex => _logger.Error(ex, "Ticket reset stream faulted"))
+            .DisposeWith(_subscriptions);
     }
 
     // 输入格式固定为 Base_Quote 两段：现货 → SpotSymbol，合约 → PerpetualFuturesSymbol

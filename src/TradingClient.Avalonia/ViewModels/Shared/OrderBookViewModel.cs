@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using Avalonia.Media;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI;
@@ -25,31 +27,33 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
     private static readonly TimeSpan BookThrottle = TimeSpan.FromMilliseconds(150); // 行情节流 100–200ms
 
     private readonly CompositeDisposable _subscriptions = new();
-    private readonly SourceCache<OrderBookLevel, decimal> _bids = new(l => l.Price);
-    private readonly SourceCache<OrderBookLevel, decimal> _asks = new(l => l.Price);
+    private readonly SourceCache<OrderBookRowViewModel, decimal> _bids = new(r => r.Price);
+    private readonly SourceCache<OrderBookRowViewModel, decimal> _asks = new(r => r.Price);
 
     private int _deltaCount; // 后台线程 Interlocked 递增，UI 线程每秒取样清零
     private double _lastApplyUs;
     private double _lastE2eMs;
+    private int _priceDecimals = 2;
+    private int _quantityDecimals = 4;
 
     public OrderBookViewModel(IObservable<ConnectorOption?> connector, IObservable<Symbol?> symbol, ILogger logger)
     {
         // 梯子展示两侧都按价格降序：asks 顶部是最远档、底部贴近价差行；bids 顶部是最优买价
         _asks.Connect()
-            .Sort(SortExpressionComparer<OrderBookLevel>.Descending(l => l.Price))
+            .Sort(SortExpressionComparer<OrderBookRowViewModel>.Descending(r => r.Price))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out var asks)
             .Subscribe()
             .DisposeWith(_subscriptions);
-        Asks = asks;
+        AskRows = asks;
 
         _bids.Connect()
-            .Sort(SortExpressionComparer<OrderBookLevel>.Descending(l => l.Price))
+            .Sort(SortExpressionComparer<OrderBookRowViewModel>.Descending(r => r.Price))
             .ObserveOn(RxApp.MainThreadScheduler)
             .Bind(out var bids)
             .Subscribe()
             .DisposeWith(_subscriptions);
-        Bids = bids;
+        BidRows = bids;
 
         var marketData = connector
             .Select(option => option?.Connector as IMarketData)
@@ -59,7 +63,11 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
 
         marketData.CombineLatest(symbol, (md, s) => (md, s))
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Do(_ => ClearLadder()) // 切换（含 Symbol 变 null）即清空旧档位展示
+            .Do(t =>
+            {
+                ClearLadder();
+                _ = LoadInstrumentAsync(t.md, t.s);
+            })
             .Where(t => t.s is not null)
             .Select(t =>
             {
@@ -87,9 +95,9 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
     }
 
-    public ReadOnlyObservableCollection<OrderBookLevel> Asks { get; }
+    public ReadOnlyObservableCollection<OrderBookRowViewModel> AskRows { get; }
 
-    public ReadOnlyObservableCollection<OrderBookLevel> Bids { get; }
+    public ReadOnlyObservableCollection<OrderBookRowViewModel> BidRows { get; }
 
     private string _spreadText = "盘口加载中…";
     public string SpreadText
@@ -98,11 +106,59 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
         private set => this.RaiseAndSetIfChanged(ref _spreadText, value);
     }
 
+    private string _lastPrice = "—";
+    public string LastPrice
+    {
+        get => _lastPrice;
+        private set => this.RaiseAndSetIfChanged(ref _lastPrice, value);
+    }
+
+    private IBrush _lastPriceBrush = Brushes.Gray;
+    public IBrush LastPriceBrush
+    {
+        get => _lastPriceBrush;
+        private set => this.RaiseAndSetIfChanged(ref _lastPriceBrush, value);
+    }
+
+    private decimal _lastPriceValue;
+
     private string _perfText = string.Empty;
     public string PerfText
     {
         get => _perfText;
         private set => this.RaiseAndSetIfChanged(ref _perfText, value);
+    }
+
+    private async Task LoadInstrumentAsync(IMarketData marketData, Symbol? symbol)
+    {
+        _priceDecimals = 2;
+        _quantityDecimals = 4;
+        if (symbol is null)
+            return;
+
+        try
+        {
+            var instruments = await marketData.GetInstrumentsAsync(symbol.Product, CancellationToken.None);
+            var instrument = instruments.FirstOrDefault(i => i.Symbol.Raw == symbol.Raw);
+            if (instrument is not null)
+            {
+                _priceDecimals = GetDecimalPlaces(instrument.TickSize);
+                _quantityDecimals = GetDecimalPlaces(instrument.StepSize);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 精度回退到默认值，不影响盘口订阅
+            Debug.WriteLine($"Failed to load instrument for {symbol.Raw}: {ex.Message}");
+        }
+    }
+
+    private static int GetDecimalPlaces(decimal value)
+    {
+        if (value == 0) return 0;
+        var s = value.ToString("G29").TrimEnd('0');
+        var idx = s.IndexOf('.');
+        return idx < 0 ? 0 : s.Length - idx - 1;
     }
 
     private void ApplyDelta(LocalOrderBook book, OrderBookDelta delta)
@@ -126,20 +182,86 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
     // 该禁令针对的是 delta 流每次都全量重拉盘口；这里只是节流后把 Top N 投影到绑定缓存
     private void RefreshLadder(LocalOrderBook book)
     {
+        var askLevels = book.GetTop(OrderSide.Sell, Depth).ToList();
+        var bidLevels = book.GetTop(OrderSide.Buy, Depth).ToList();
+
+        // asks 列表顶部高价、底部低价（最优卖）。累计量从底部最优卖向上累加，
+        // 使远端高价（顶部）累计最大、深度条最长。
+        var askCum = new decimal[askLevels.Count];
+        decimal askSum = 0;
+        for (int i = 0; i < askLevels.Count; i++)
+        {
+            askSum += askLevels[i].Quantity;
+            askCum[i] = askSum;
+        }
+
+        // bids 列表顶部高价（最优买）、底部低价。累计量从顶部最优买向下累加，
+        // 使远端低价（底部）累计最大、深度条最长。
+        var bidCum = new decimal[bidLevels.Count];
+        decimal bidSum = 0;
+        for (int i = 0; i < bidLevels.Count; i++)
+        {
+            bidSum += bidLevels[i].Quantity;
+            bidCum[i] = bidSum;
+        }
+
+        decimal maxCumulative = 0;
+        if (askCum.Length > 0) maxCumulative = Math.Max(maxCumulative, askCum.Max());
+        if (bidCum.Length > 0) maxCumulative = Math.Max(maxCumulative, bidCum.Max());
+        if (maxCumulative <= 0) maxCumulative = 1;
+
         _asks.Edit(u =>
         {
             u.Clear();
-            u.AddOrUpdate(book.GetTop(OrderSide.Sell, Depth));
+            for (int i = 0; i < askLevels.Count; i++)
+            {
+                var l = askLevels[i];
+                u.AddOrUpdate(new OrderBookRowViewModel
+                {
+                    Price = l.Price,
+                    Quantity = l.Quantity,
+                    CumulativeQuantity = askCum[i],
+                    DepthPercent = (double)(askCum[i] / maxCumulative) * 100.0,
+                    PriceBrush = Brushes.Crimson,
+                    PriceDecimals = _priceDecimals,
+                    QuantityDecimals = _quantityDecimals,
+                });
+            }
         });
+
         _bids.Edit(u =>
         {
             u.Clear();
-            u.AddOrUpdate(book.GetTop(OrderSide.Buy, Depth));
+            for (int i = 0; i < bidLevels.Count; i++)
+            {
+                var l = bidLevels[i];
+                u.AddOrUpdate(new OrderBookRowViewModel
+                {
+                    Price = l.Price,
+                    Quantity = l.Quantity,
+                    CumulativeQuantity = bidCum[i],
+                    DepthPercent = (double)(bidCum[i] / maxCumulative) * 100.0,
+                    PriceBrush = Brushes.ForestGreen,
+                    PriceDecimals = _priceDecimals,
+                    QuantityDecimals = _quantityDecimals,
+                });
+            }
         });
 
-        SpreadText = book is { BestBid: { } bid, BestAsk: { } ask }
-            ? $"价差 {(ask.Price - bid.Price):G29} · 买 {bid.Price:G29} / 卖 {ask.Price:G29}"
-            : "盘口加载中…";
+        if (book is { BestBid: { } bid, BestAsk: { } ask })
+        {
+            var mid = (bid.Price + ask.Price) / 2m;
+            SpreadText = (ask.Price - bid.Price).ToString($"F{_priceDecimals}");
+            LastPriceBrush = mid >= _lastPriceValue ? Brushes.ForestGreen : Brushes.Crimson;
+            _lastPriceValue = mid;
+            LastPrice = mid.ToString($"F{_priceDecimals}");
+        }
+        else
+        {
+            SpreadText = "盘口加载中…";
+            LastPrice = "—";
+            LastPriceBrush = Brushes.Gray;
+        }
     }
 
     private void ClearLadder()
@@ -147,6 +269,9 @@ public sealed class OrderBookViewModel : ViewModelBase, IDisposable
         _asks.Clear();
         _bids.Clear();
         SpreadText = "盘口加载中…";
+        LastPrice = "—";
+        LastPriceBrush = Brushes.Gray;
+        _lastPriceValue = 0m;
     }
 
     public void Dispose() => _subscriptions.Dispose();

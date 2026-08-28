@@ -2,224 +2,314 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:TradingClient.Avalonia.ViewModels"
         xmlns:options="using:TradingClient.Avalonia.ViewModels.Options"
+        xmlns:shared="using:TradingClient.Avalonia.ViewModels.Shared"
         xmlns:trading="using:TradingClient.Domain.Trading"
         xmlns:conv="using:TradingClient.Avalonia.Converters"
         x:Class="TradingClient.Avalonia.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="TradingClient" Width="980" Height="1450">
+        Title="TradingClient" Width="1280" Height="900">
 
-  <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" Margin="12" RowSpacing="12">
+  <Window.Resources>
+    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, JetBrains Mono, monospace</FontFamily>
+    <SolidColorBrush x:Key="AskColor">#FF5A67</SolidColorBrush>
+    <SolidColorBrush x:Key="BidColor">#0DBF5C</SolidColorBrush>
+    <SolidColorBrush x:Key="AskDepthColor">#33FF5A67</SolidColorBrush>
+    <SolidColorBrush x:Key="BidDepthColor">#330DBF5C</SolidColorBrush>
+    <SolidColorBrush x:Key="PanelBorderColor">#2A2E39</SolidColorBrush>
+  </Window.Resources>
 
-    <!-- 交易所 + 产品选择器：交易所条目由 ExchangeRegistry/Capabilities 驱动，「本地 · 期权」为本地模块条目 -->
-    <ComboBox Grid.Row="0"
-              ItemsSource="{Binding SelectorOptions}"
-              SelectedItem="{Binding SelectedOption}"
-              HorizontalAlignment="Left" MinWidth="200">
-      <ComboBox.ItemTemplate>
-        <DataTemplate DataType="vm:SelectorOption">
-          <TextBlock Text="{Binding DisplayName}" />
-        </DataTemplate>
-      </ComboBox.ItemTemplate>
-    </ComboBox>
+  <Grid RowDefinitions="Auto,*,Auto,Auto,Auto" Margin="8" RowSpacing="8">
 
-    <!-- 交易对输入 -->
-    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8"
-                IsVisible="{Binding IsExchangeSelected}">
-      <TextBlock Text="交易对" VerticalAlignment="Center" />
-      <TextBox Text="{Binding SymbolText, UpdateSourceTrigger=PropertyChanged}" Width="160" Watermark="BTC_USDT" />
-      <TextBlock Text="{Binding SymbolMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
-    </StackPanel>
+    <!-- 顶部栏：交易所/产品选择 + 交易对 -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto">
+      <ComboBox Grid.Column="0" ItemsSource="{Binding SelectorOptions}"
+                SelectedItem="{Binding SelectedOption}"
+                MinWidth="160" VerticalAlignment="Center" Margin="0,0,12,0">
+        <ComboBox.ItemTemplate>
+          <DataTemplate DataType="vm:SelectorOption">
+            <TextBlock Text="{Binding DisplayName}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
 
-    <!-- Ticker 区 -->
-    <Border Grid.Row="2" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
-            IsVisible="{Binding IsExchangeSelected}">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="16">
-        <TextBlock Grid.Column="0" Text="Best Bid" />
-        <TextBlock Grid.Column="1" Text="{Binding BestBid}" FontWeight="Bold" />
-        <TextBlock Grid.Column="2" Text="Best Ask" />
-        <TextBlock Grid.Column="3" Text="{Binding BestAsk}" FontWeight="Bold" />
-        <TextBlock Grid.Column="4" Text="时间" />
-        <TextBlock Grid.Column="5" Text="{Binding QuoteTimestamp}" />
-      </Grid>
-    </Border>
-
-    <!-- 订单簿梯子（现货/合约共用）：asks 降序展示（顶部最远档、底部贴近价差行），bids 顶部为最优买价 -->
-    <Border Grid.Row="3" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
-            IsVisible="{Binding IsExchangeSelected}">
-      <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="4">
-        <Grid Grid.Row="0" ColumnDefinitions="160,*">
-          <TextBlock Grid.Column="0" Text="价格" FontWeight="Bold" />
-          <TextBlock Grid.Column="1" Text="数量" FontWeight="Bold" />
-        </Grid>
-
-        <ItemsControl Grid.Row="1" ItemsSource="{Binding OrderBook.Asks}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate DataType="trading:OrderBookLevel">
-              <Grid ColumnDefinitions="160,*">
-                <TextBlock Grid.Column="0" Text="{Binding Price}" Foreground="#C0392B" />
-                <TextBlock Grid.Column="1" Text="{Binding Quantity}" />
-              </Grid>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <!-- 价差/最优买卖价一行：由本地盘口算出，不依赖 ticker 流 -->
-        <TextBlock Grid.Row="2" Text="{Binding OrderBook.SpreadText}" FontWeight="Bold" Margin="0,4" />
-
-        <ItemsControl Grid.Row="3" ItemsSource="{Binding OrderBook.Bids}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate DataType="trading:OrderBookLevel">
-              <Grid ColumnDefinitions="160,*">
-                <TextBlock Grid.Column="0" Text="{Binding Price}" Foreground="#1E8449" />
-                <TextBlock Grid.Column="1" Text="{Binding Quantity}" />
-              </Grid>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <!-- 性能读数（行情链路埋点的 UI 侧展示） -->
-        <TextBlock Grid.Row="4" Text="{Binding OrderBook.PerfText}" FontSize="11" Foreground="Gray" />
-      </Grid>
-    </Border>
-
-    <!-- 连接状态 + 风控状态（事前/事中咬合点的可视化） -->
-    <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
-      <TextBlock Text="连接状态" VerticalAlignment="Center" />
-      <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center" />
-      <TextBlock Text="风控状态" VerticalAlignment="Center" Margin="16,0,0,0" />
-      <TextBlock Text="{Binding RiskStateText}" Foreground="{Binding RiskStateBrush}"
-                 FontWeight="{Binding RiskStateFontWeight}" VerticalAlignment="Center" />
-    </StackPanel>
-
-    <!-- 风控迁移横幅：ReduceOnly/Locked 期间常驻，含时间与原因 -->
-    <Border Grid.Row="5" IsVisible="{Binding HasRiskBanner}"
-            Background="#2B0000" CornerRadius="4" Padding="8">
-      <TextBlock Text="{Binding RiskBannerText}" Foreground="Red" FontWeight="Bold" TextWrapping="Wrap" />
-    </Border>
-
-    <!-- 下单票：现货/合约共用，按选中项产品线分派用例 -->
-    <Border Grid.Row="6" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
-            IsVisible="{Binding IsExchangeSelected}">
-      <StackPanel Spacing="8">
-        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-          <ComboBox Grid.Column="0" ItemsSource="{Binding OrderTicket.Sides}"
-                    SelectedItem="{Binding OrderTicket.SelectedSide}" MinWidth="70" />
-          <ComboBox Grid.Column="1" ItemsSource="{Binding OrderTicket.OrderTypes}"
-                    SelectedItem="{Binding OrderTicket.SelectedType}" MinWidth="80" />
-          <TextBox Grid.Column="2" Text="{Binding OrderTicket.PriceText}" Width="110"
-                   Watermark="价格" IsEnabled="{Binding OrderTicket.IsLimit}" />
-          <TextBox Grid.Column="3" Text="{Binding OrderTicket.QuantityText}" Width="110" Watermark="数量" />
-          <ComboBox Grid.Column="4" IsVisible="{Binding OrderTicket.IsFuturesProduct}"
-                    ItemsSource="{Binding OrderTicket.PositionSides}"
-                    SelectedItem="{Binding OrderTicket.SelectedPositionSide}" MinWidth="80" />
-          <Button Grid.Column="5" Content="下单" Command="{Binding OrderTicket.Submit}" />
-        </Grid>
-        <TextBlock Text="{Binding OrderTicket.ResultText}" Foreground="{Binding OrderTicket.ResultBrush}"
-                   TextWrapping="Wrap" />
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                  IsVisible="{Binding IsExchangeSelected}" VerticalAlignment="Center">
+        <AutoCompleteBox Text="{Binding SymbolText, UpdateSourceTrigger=PropertyChanged}"
+                         ItemsSource="{Binding SymbolSuggestions}"
+                         FilterMode="ContainsOrdinal"
+                         Watermark="BTC_USDT" Width="160" VerticalAlignment="Center"/>
+        <TextBlock Text="{Binding SymbolMessage}" Foreground="DarkOrange" VerticalAlignment="Center" FontSize="12"/>
       </StackPanel>
-    </Border>
 
-    <!-- 合约面板：仅选中「合约」条目且连接器支持 IFuturesTrading 时可见（按能力显隐） -->
-    <Border Grid.Row="7" IsVisible="{Binding IsFuturesSelected}"
-            BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
-      <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="8">
+      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+        <TextBlock Text="连接状态" VerticalAlignment="Center" FontSize="12" Foreground="Gray"/>
+        <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontWeight="Bold" VerticalAlignment="Center"/>
+        <TextBlock Text="风控状态" VerticalAlignment="Center" FontSize="12" Foreground="Gray"/>
+        <TextBlock Text="{Binding RiskStateText}" Foreground="{Binding RiskStateBrush}"
+                   FontWeight="{Binding RiskStateFontWeight}" VerticalAlignment="Center"/>
+      </StackPanel>
+    </Grid>
 
-        <!-- 强平预警 banner：保留最后一条 -->
-        <Border Grid.Row="0" IsVisible="{Binding FuturesPanel.HasLiquidationWarning}"
-                Background="#2B1A00" CornerRadius="4" Padding="8">
-          <TextBlock Text="{Binding FuturesPanel.LiquidationWarningText}"
-                     Foreground="{Binding FuturesPanel.LiquidationWarningBrush}" FontWeight="Bold" />
-        </Border>
+    <!-- 主交易区：左订单簿 + 右侧面板 -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,340" ColumnSpacing="8" IsVisible="{Binding IsExchangeSelected}">
 
-        <!-- 杠杆 + 保证金模式 -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
-          <TextBlock Text="杠杆" VerticalAlignment="Center" />
-          <TextBox Text="{Binding FuturesPanel.LeverageText}" Width="64" Watermark="1-125" />
-          <ComboBox ItemsSource="{Binding FuturesPanel.MarginModes}"
-                    SelectedItem="{Binding FuturesPanel.SelectedMarginMode}" MinWidth="100" />
-          <Button Content="应用杠杆" Command="{Binding FuturesPanel.ApplyLeverage}" />
-          <TextBlock Text="{Binding FuturesPanel.LeverageMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
-        </StackPanel>
+      <!-- 订单簿 -->
+      <Border Grid.Column="0" BorderBrush="{StaticResource PanelBorderColor}" BorderThickness="1" CornerRadius="4" Padding="8">
+        <Grid RowDefinitions="Auto,*,Auto,Auto,*" RowSpacing="2">
 
-        <!-- 持仓模式：仅支持双向持仓的交易所可见（Capabilities.SupportsDualPositionMode） -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8"
-                    IsVisible="{Binding FuturesPanel.SupportsDualPositionMode}">
-          <TextBlock Text="{Binding FuturesPanel.PositionModeStatus}" VerticalAlignment="Center" />
-          <Button Content="单向" Command="{Binding FuturesPanel.SetSinglePositionMode}" />
-          <Button Content="双向" Command="{Binding FuturesPanel.SetDualPositionMode}" />
-        </StackPanel>
+          <!-- 表头 -->
+          <Grid Grid.Row="0" ColumnDefinitions="*,*,*,*" Margin="0,0,8,4">
+            <TextBlock Text="价格" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+            <TextBlock Grid.Column="1" Text="数量" FontWeight="Bold" FontSize="12" Foreground="Gray" TextAlignment="Right"/>
+            <TextBlock Grid.Column="2" Text="累计" FontWeight="Bold" FontSize="12" Foreground="Gray" TextAlignment="Right"/>
+            <TextBlock Grid.Column="3" Text="" FontWeight="Bold" FontSize="12" Foreground="Gray" TextAlignment="Right"/>
+          </Grid>
 
-        <!-- 持仓表头 -->
-        <Grid Grid.Row="3" ColumnDefinitions="140,80,100,120,120,60,100">
-          <TextBlock Grid.Column="0" Text="Symbol" FontWeight="Bold" />
-          <TextBlock Grid.Column="1" Text="Side" FontWeight="Bold" />
-          <TextBlock Grid.Column="2" Text="Quantity" FontWeight="Bold" />
-          <TextBlock Grid.Column="3" Text="EntryPrice" FontWeight="Bold" />
-          <TextBlock Grid.Column="4" Text="UnrealizedPnl" FontWeight="Bold" />
-          <TextBlock Grid.Column="5" Text="Leverage" FontWeight="Bold" />
-          <TextBlock Grid.Column="6" Text="MarginMode" FontWeight="Bold" />
-        </Grid>
-
-        <ScrollViewer Grid.Row="4" MaxHeight="220">
-          <StackPanel>
-            <TextBlock Text="{Binding FuturesPanel.PositionsMessage}" Foreground="DarkOrange" />
-            <ItemsControl ItemsSource="{Binding FuturesPanel.Positions}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="trading:Position">
-                  <Grid ColumnDefinitions="140,80,100,120,120,60,100">
-                    <TextBlock Grid.Column="0" Text="{Binding Symbol.Raw}" />
-                    <TextBlock Grid.Column="1" Text="{Binding Side}" />
-                    <TextBlock Grid.Column="2" Text="{Binding Quantity}" />
-                    <TextBlock Grid.Column="3" Text="{Binding EntryPrice}" />
-                    <TextBlock Grid.Column="4" Text="{Binding UnrealizedPnl}"
-                               Foreground="{Binding UnrealizedPnl, Converter={x:Static conv:PnlBrushConverter.Instance}}" />
-                    <TextBlock Grid.Column="5" Text="{Binding Leverage}" />
-                    <TextBlock Grid.Column="6" Text="{Binding MarginMode}" />
-                  </Grid>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
-        </ScrollViewer>
-      </Grid>
-    </Border>
-
-    <!-- 余额区 -->
-    <Border Grid.Row="8" BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12"
-            IsVisible="{Binding IsExchangeSelected}">
-      <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
-        <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" />
-
-        <Grid Grid.Row="1" ColumnDefinitions="120,160,160">
-          <TextBlock Grid.Column="0" Text="Asset" FontWeight="Bold" />
-          <TextBlock Grid.Column="1" Text="Total" FontWeight="Bold" />
-          <TextBlock Grid.Column="2" Text="Frozen" FontWeight="Bold" />
-        </Grid>
-
-        <ScrollViewer Grid.Row="2">
-          <ItemsControl ItemsSource="{Binding Balances}">
+          <!-- 卖盘 -->
+          <ItemsControl Grid.Row="1" ItemsSource="{Binding OrderBook.AskRows}" VerticalAlignment="Bottom">
             <ItemsControl.ItemTemplate>
-              <DataTemplate DataType="trading:AssetBalance">
-                <Grid ColumnDefinitions="120,160,160">
-                  <TextBlock Grid.Column="0" Text="{Binding Asset}" />
-                  <TextBlock Grid.Column="1" Text="{Binding Total}" />
-                  <TextBlock Grid.Column="2" Text="{Binding Frozen}" />
-                </Grid>
+              <DataTemplate DataType="shared:OrderBookRowViewModel">
+                <Button Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Stretch"
+                        Command="{Binding $parent[Window].DataContext.SelectPriceCommand}" CommandParameter="{Binding Price}">
+                  <Grid ColumnDefinitions="*,*,*,*">
+                    <Rectangle Grid.Column="0" Grid.ColumnSpan="4" HorizontalAlignment="Right" Width="{Binding DepthPercent, Mode=OneWay}" 
+                               Fill="{StaticResource AskDepthColor}" Opacity="0.6"/>
+                    <TextBlock Grid.Column="0" Text="{Binding PriceText}" Foreground="{StaticResource AskColor}" TextAlignment="Left" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                    <TextBlock Grid.Column="1" Text="{Binding QuantityText}" Foreground="White" TextAlignment="Right" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                    <TextBlock Grid.Column="2" Text="{Binding CumulativeText}" Foreground="Gray" TextAlignment="Right" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                  </Grid>
+                </Button>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-        </ScrollViewer>
+
+          <!-- 最新价/价差 -->
+          <Border Grid.Row="2" Background="#1E222D" CornerRadius="3" Padding="8,4" Margin="0,4">
+            <Grid ColumnDefinitions="*,Auto,*">
+              <TextBlock Grid.Column="0" Text="{Binding BestBid}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource BidColor}" HorizontalAlignment="Left" FontFamily="{StaticResource MonoFont}"/>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                <TextBlock Text="{Binding OrderBook.LastPrice}" FontSize="20" FontWeight="Bold"
+                           Foreground="{Binding OrderBook.LastPriceBrush}" FontFamily="{StaticResource MonoFont}"/>
+                <TextBlock Text="{Binding OrderBook.SpreadText}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" FontFamily="{StaticResource MonoFont}"/>
+              </StackPanel>
+              <TextBlock Grid.Column="2" Text="{Binding BestAsk}" FontSize="14" FontWeight="Bold" Foreground="{StaticResource AskColor}" HorizontalAlignment="Right" FontFamily="{StaticResource MonoFont}"/>
+            </Grid>
+          </Border>
+
+          <!-- 买盘 -->
+          <ItemsControl Grid.Row="4" ItemsSource="{Binding OrderBook.BidRows}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="shared:OrderBookRowViewModel">
+                <Button Padding="0" Background="Transparent" BorderThickness="0" HorizontalAlignment="Stretch"
+                        Command="{Binding $parent[Window].DataContext.SelectPriceCommand}" CommandParameter="{Binding Price}">
+                  <Grid ColumnDefinitions="*,*,*,*">
+                    <Rectangle Grid.Column="0" Grid.ColumnSpan="4" HorizontalAlignment="Right" Width="{Binding DepthPercent, Mode=OneWay}" 
+                               Fill="{StaticResource BidDepthColor}" Opacity="0.6"/>
+                    <TextBlock Grid.Column="0" Text="{Binding PriceText}" Foreground="{StaticResource BidColor}" TextAlignment="Left" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                    <TextBlock Grid.Column="1" Text="{Binding QuantityText}" Foreground="White" TextAlignment="Right" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                    <TextBlock Grid.Column="2" Text="{Binding CumulativeText}" Foreground="Gray" TextAlignment="Right" FontFamily="{StaticResource MonoFont}" FontSize="12" Padding="0,1"/>
+                  </Grid>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+        </Grid>
+      </Border>
+
+      <!-- 右侧面板：下单 + 账户 -->
+      <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="8">
+
+        <!-- 下单面板 -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource PanelBorderColor}" BorderThickness="1" CornerRadius="4" Padding="12">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="10">
+
+            <!-- 开仓/平仓切换（期货） -->
+            <Grid Grid.Row="0" ColumnDefinitions="*,*" IsVisible="{Binding OrderTicket.IsFuturesProduct}">
+              <Button Grid.Column="0" Content="开仓" Background="#3A3F4B" Foreground="White" HorizontalAlignment="Stretch"/>
+              <Button Grid.Column="1" Content="平仓" Background="Transparent" Foreground="Gray" HorizontalAlignment="Stretch"/>
+            </Grid>
+
+            <!-- 杠杆/保证金模式 -->
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" IsVisible="{Binding OrderTicket.IsFuturesProduct}">
+              <ComboBox ItemsSource="{Binding FuturesPanel.MarginModes}" SelectedItem="{Binding FuturesPanel.SelectedMarginMode}" MinWidth="90"/>
+              <TextBox Text="{Binding FuturesPanel.LeverageText}" Width="48" Watermark="1-125"/>
+              <TextBlock Text="x" VerticalAlignment="Center" Foreground="Gray"/>
+              <Button Content="应用" Command="{Binding FuturesPanel.ApplyLeverage}" Padding="8,2"/>
+              <TextBlock Text="{Binding FuturesPanel.LeverageMessage}" Foreground="DarkOrange" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- 持仓模式：仅期货，且仅支持双向持仓的交易所显示 -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsFuturesSelected}">
+              <TextBlock Text="{Binding FuturesPanel.PositionModeStatus}" VerticalAlignment="Center" FontSize="12" Foreground="Gray"/>
+              <Button Content="单向" Command="{Binding FuturesPanel.SetSinglePositionMode}" Padding="8,2" IsVisible="{Binding FuturesPanel.SupportsDualPositionMode, FallbackValue=False}"/>
+              <Button Content="双向" Command="{Binding FuturesPanel.SetDualPositionMode}" Padding="8,2" IsVisible="{Binding FuturesPanel.SupportsDualPositionMode, FallbackValue=False}"/>
+            </StackPanel>
+
+            <!-- Buy/Sell 切换 -->
+            <Grid Grid.Row="3" ColumnDefinitions="*,*" ColumnSpacing="4">
+              <Button Grid.Column="0" Content="{Binding OrderTicket.BuyButtonText}" Command="{Binding OrderTicket.SelectBuy}"
+                      Background="{Binding OrderTicket.BuyButtonBackground}" Foreground="White" FontWeight="Bold"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                      MinHeight="36" Padding="8,0" IsEnabled="{Binding OrderTicket.IsBuyEnabled}"/>
+              <Button Grid.Column="1" Content="{Binding OrderTicket.SellButtonText}" Command="{Binding OrderTicket.SelectSell}"
+                      Background="{Binding OrderTicket.SellButtonBackground}" Foreground="White" FontWeight="Bold"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                      MinHeight="36" Padding="8,0" IsEnabled="{Binding OrderTicket.IsSellEnabled}"/>
+            </Grid>
+
+            <!-- 订单类型 -->
+            <ComboBox Grid.Row="4" ItemsSource="{Binding OrderTicket.OrderTypes}" SelectedItem="{Binding OrderTicket.SelectedType}" HorizontalAlignment="Stretch"/>
+
+            <!-- 价格 -->
+            <Grid Grid.Row="5" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+              <TextBox Grid.Column="0" Text="{Binding OrderTicket.PriceText}" Watermark="价格" IsEnabled="{Binding OrderTicket.IsLimit}"/>
+              <Button Grid.Column="1" Content="最优价" Padding="8,0" IsEnabled="{Binding OrderTicket.IsLimit}" Command="{Binding OrderTicket.SetBestPrice}"/>
+            </Grid>
+
+            <!-- 数量 -->
+            <TextBox Grid.Row="6" Text="{Binding OrderTicket.QuantityText}" Watermark="数量"/>
+
+            <!-- 比例按钮 -->
+            <UniformGrid Grid.Row="7" Columns="4">
+              <Button Content="25%" Command="{Binding OrderTicket.SetQuantityPercent}" CommandParameter="0.25" Padding="4,2" Margin="2,0"/>
+              <Button Content="50%" Command="{Binding OrderTicket.SetQuantityPercent}" CommandParameter="0.50" Padding="4,2" Margin="2,0"/>
+              <Button Content="75%" Command="{Binding OrderTicket.SetQuantityPercent}" CommandParameter="0.75" Padding="4,2" Margin="2,0"/>
+              <Button Content="100%" Command="{Binding OrderTicket.SetQuantityPercent}" CommandParameter="1.00" Padding="4,2" Margin="2,0"/>
+            </UniformGrid>
+
+            <!-- 可用 / 可开 -->
+            <Grid Grid.Row="8" ColumnDefinitions="Auto,*">
+              <TextBlock Grid.Column="0" Text="可用" FontSize="12" Foreground="Gray" VerticalAlignment="Center"/>
+              <TextBlock Grid.Column="1" Text="{Binding OrderTicket.AvailableText}" FontSize="12" HorizontalAlignment="Right" FontFamily="{StaticResource MonoFont}"
+                         TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            </Grid>
+            <Grid Grid.Row="9" ColumnDefinitions="Auto,*" IsVisible="{Binding OrderTicket.IsFuturesProduct}">
+              <TextBlock Grid.Column="0" Text="可开" FontSize="12" Foreground="Gray" VerticalAlignment="Center"/>
+              <TextBlock Grid.Column="1" Text="{Binding OrderTicket.MaxOpenText}" FontSize="12" HorizontalAlignment="Right" FontFamily="{StaticResource MonoFont}"
+                         TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            </Grid>
+
+            <!-- 风控提示 -->
+            <TextBlock Grid.Row="10" Text="{Binding OrderTicket.RiskHintText}" Foreground="{Binding OrderTicket.RiskHintBrush}"
+                       TextWrapping="Wrap" FontSize="12" VerticalAlignment="Bottom" FontWeight="Bold"/>
+          </Grid>
+        </Border>
+
+        <!-- 账户面板 -->
+        <Border Grid.Row="1" BorderBrush="{StaticResource PanelBorderColor}" BorderThickness="1" CornerRadius="4" Padding="12">
+          <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
+            <TextBlock Grid.Row="0" Text="{Binding AccountSummary}" FontWeight="Bold" FontSize="13"/>
+            <Grid Grid.Row="1" ColumnDefinitions="120,160,160">
+              <TextBlock Grid.Column="0" Text="Asset" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+              <TextBlock Grid.Column="1" Text="Total" FontWeight="Bold" FontSize="12" Foreground="Gray" TextAlignment="Right"/>
+              <TextBlock Grid.Column="2" Text="Frozen" FontWeight="Bold" FontSize="12" Foreground="Gray" TextAlignment="Right"/>
+            </Grid>
+            <ScrollViewer Grid.Row="2">
+              <ItemsControl ItemsSource="{Binding Balances}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="trading:AssetBalance">
+                    <Grid ColumnDefinitions="120,160,160" Margin="0,2">
+                      <TextBlock Grid.Column="0" Text="{Binding Asset}" FontSize="12"/>
+                      <TextBlock Grid.Column="1" Text="{Binding Total}" FontSize="12" TextAlignment="Right" FontFamily="{StaticResource MonoFont}"/>
+                      <TextBlock Grid.Column="2" Text="{Binding Frozen}" FontSize="12" TextAlignment="Right" FontFamily="{StaticResource MonoFont}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </Border>
       </Grid>
+    </Grid>
+
+    <!-- 风控迁移横幅 -->
+    <Border Grid.Row="1" IsVisible="{Binding HasRiskBanner}"
+            Background="#4A1515" CornerRadius="4" Padding="8" Margin="0,0,0,0"
+            HorizontalAlignment="Stretch" VerticalAlignment="Top">
+      <TextBlock Text="{Binding RiskBannerText}" Foreground="#FF6B6B" FontWeight="Bold" TextWrapping="Wrap" />
     </Border>
 
-    <!-- 期权实验室（本地分析模块）：仅选中「本地 · 期权」时可见。
-         微笑曲线用 Polyline 手绘而不引 LiveCharts2/ScottPlot：单条曲线不值一个包；
-         坐标轴留白、不画全刻度——演示形态，曲面拟合与坐标轴刻度同属增强项 -->
-    <Border Grid.Row="9" IsVisible="{Binding IsOptionsLabSelected}"
-            BorderBrush="Gray" BorderThickness="1" CornerRadius="4" Padding="12">
+    <!-- 底部标签页：持仓 / 当前委托 / 成交记录 -->
+    <TabControl Grid.Row="2" IsVisible="{Binding IsExchangeSelected}">
+      <TabItem Header="持仓">
+        <Grid RowDefinitions="Auto,*" Margin="0,8,0,0">
+          <!-- 强平预警：仅期货，有数据时才显示 -->
+          <Border Grid.Row="0" IsVisible="{Binding FuturesPanel.HasLiquidationWarning, FallbackValue=False}"
+                  Background="#3A2A15" CornerRadius="4" Padding="8" Margin="0,0,0,8">
+            <TextBlock Text="{Binding FuturesPanel.LiquidationWarningText}"
+                       Foreground="{Binding FuturesPanel.LiquidationWarningBrush}" FontWeight="Bold"/>
+          </Border>
+
+          <!-- 现货：无持仓概念 -->
+          <TextBlock Grid.Row="1" Text="现货暂无持仓" Margin="12" Foreground="Gray"
+                     IsVisible="{Binding !IsFuturesSelected}" VerticalAlignment="Top"/>
+
+          <!-- 期货：持仓表 -->
+          <ScrollViewer Grid.Row="1" MaxHeight="180" IsVisible="{Binding IsFuturesSelected}">
+            <StackPanel>
+              <TextBlock Text="{Binding FuturesPanel.PositionsMessage}" Foreground="DarkOrange" FontSize="12"/>
+              <Grid ColumnDefinitions="140,80,100,120,120,60,100" Margin="0,4">
+                <TextBlock Grid.Column="0" Text="Symbol" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="1" Text="Side" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="2" Text="Quantity" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="3" Text="EntryPrice" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="4" Text="UnrealizedPnl" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="5" Text="Leverage" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+                <TextBlock Grid.Column="6" Text="MarginMode" FontWeight="Bold" FontSize="12" Foreground="Gray"/>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding FuturesPanel.Positions}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="trading:Position">
+                    <Grid ColumnDefinitions="140,80,100,120,120,60,100" Margin="0,1">
+                      <TextBlock Grid.Column="0" Text="{Binding Symbol.Raw}" FontSize="12" FontFamily="{StaticResource MonoFont}"/>
+                      <TextBlock Grid.Column="1" Text="{Binding Side}" FontSize="12"/>
+                      <TextBlock Grid.Column="2" Text="{Binding Quantity}" FontSize="12" FontFamily="{StaticResource MonoFont}" TextAlignment="Right"/>
+                      <TextBlock Grid.Column="3" Text="{Binding EntryPrice}" FontSize="12" FontFamily="{StaticResource MonoFont}" TextAlignment="Right"/>
+                      <TextBlock Grid.Column="4" Text="{Binding UnrealizedPnl}"
+                                 Foreground="{Binding UnrealizedPnl, Converter={x:Static conv:PnlBrushConverter.Instance}}" FontSize="12" FontFamily="{StaticResource MonoFont}" TextAlignment="Right"/>
+                      <TextBlock Grid.Column="5" Text="{Binding Leverage}" FontSize="12"/>
+                      <TextBlock Grid.Column="6" Text="{Binding MarginMode}" FontSize="12"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="当前委托">
+        <TextBlock Text="当前委托列表（待接入）" Margin="12" Foreground="Gray"/>
+      </TabItem>
+
+      <TabItem Header="成交记录">
+        <TextBlock Text="成交记录（待接入）" Margin="12" Foreground="Gray"/>
+      </TabItem>
+    </TabControl>
+
+    <!-- 状态栏 -->
+    <Border Grid.Row="3" BorderBrush="{StaticResource PanelBorderColor}" BorderThickness="1" CornerRadius="4" Padding="8,4"
+            IsVisible="{Binding IsExchangeSelected}">
+      <StackPanel Orientation="Horizontal" Spacing="24" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="连接" VerticalAlignment="Center" FontSize="11" Foreground="Gray"/>
+          <TextBlock Text="{Binding ConnectionStatus}" Foreground="{Binding ConnectionBrush}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="风控" VerticalAlignment="Center" FontSize="11" Foreground="Gray"/>
+          <TextBlock Text="{Binding RiskStateText}" Foreground="{Binding RiskStateBrush}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+        </StackPanel>
+        <TextBlock Text="{Binding OrderBook.PerfText}" FontSize="11" Foreground="Gray" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center"/>
+      </StackPanel>
+    </Border>
+
+    <!-- 期权实验室 -->
+    <Border Grid.Row="4" IsVisible="{Binding IsOptionsLabSelected}"
+            BorderBrush="{StaticResource PanelBorderColor}" BorderThickness="1" CornerRadius="4" Padding="12">
       <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
 
-        <!-- 参数行：改动去抖 300ms 后后台线程重算 -->
+        <!-- 参数行 -->
         <WrapPanel Grid.Row="0">
           <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
             <TextBlock Text="标的 F" VerticalAlignment="Center" />
@@ -247,15 +337,14 @@
           </StackPanel>
           <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,14,6">
             <TextBlock Text="期限" VerticalAlignment="Center" />
-            <ComboBox ItemsSource="{Binding OptionsLab.Tenors}"
-                      SelectedItem="{Binding OptionsLab.SelectedTenor}" MinWidth="80" />
+            <ComboBox ItemsSource="{Binding OptionsLab.Tenors}" SelectedItem="{Binding OptionsLab.SelectedTenor}" MinWidth="80" />
           </StackPanel>
           <TextBlock Text="{Binding OptionsLab.ParamMessage}" Foreground="DarkOrange" VerticalAlignment="Center" />
         </WrapPanel>
 
         <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto" ColumnSpacing="16">
 
-          <!-- T 型报价表：Call 侧 | 行权价 | Put 侧镜像；平值档加粗，实值区底色区分 -->
+          <!-- T 型报价表 -->
           <StackPanel Grid.Column="0" Spacing="2">
             <Grid ColumnDefinitions="66,54,68,54,56,66,88,66,56,54,68,54,66">
               <TextBlock Grid.Column="0" Text="C-IV" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
@@ -300,10 +389,10 @@
             </ScrollViewer>
           </StackPanel>
 
-          <!-- 波动率微笑：横轴 m = ln(K/F)，纵轴 σ；红点为平值点 -->
+          <!-- 波动率微笑 -->
           <StackPanel Grid.Column="1" Spacing="4">
             <TextBlock Text="波动率微笑（横轴 m，纵轴 σ）" FontWeight="Bold" />
-            <Canvas Width="440" Height="180" Background="#FAFAFA">
+            <Canvas Width="440" Height="180" Background="#1E222D">
               <Polyline Points="{Binding OptionsLab.SmilePoints}" Stroke="#1E6FD9" StrokeThickness="2"
                         IsVisible="{Binding OptionsLab.HasSmile}" />
               <Ellipse Width="8" Height="8" Fill="#C0392B"
@@ -318,7 +407,7 @@
           </StackPanel>
         </Grid>
 
-        <!-- 持仓 Greeks 汇总：mock 持仓 + 合计行 + Delta 对冲建议 -->
+        <!-- 持仓 Greeks 汇总 -->
         <StackPanel Grid.Row="2" Spacing="4">
           <TextBlock Text="持仓 Greeks 汇总（mock 持仓，数量单位：吨）" FontWeight="Bold" />
           <Grid ColumnDefinitions="220,70,70,80,80,80,80">
