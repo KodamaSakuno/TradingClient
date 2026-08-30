@@ -9,15 +9,16 @@ namespace TradingClient.Avalonia.ViewModels.Options;
 /// </summary>
 public sealed class TQuoteRowViewModel
 {
-    private static readonly IBrush ItmCallBrush = new SolidColorBrush(Color.Parse("#E8F0FE"));
-    private static readonly IBrush ItmPutBrush = new SolidColorBrush(Color.Parse("#FDEDEC"));
+    private static readonly IBrush ItmCallBrush = new SolidColorBrush(Color.Parse("#1A3A2A"));
+    private static readonly IBrush ItmPutBrush = new SolidColorBrush(Color.Parse("#3A1A1A"));
 
     public TQuoteRowViewModel(OptionQuoteRow row, double forward, double atmStrike)
     {
         StrikeText = row.Strike.ToString("F0");
-        StrikeWeight = row.Strike == atmStrike ? FontWeight.Bold : FontWeight.Normal;
-        CallBackground = row.Strike < forward ? ItmCallBrush : null;
-        PutBackground = row.Strike > forward ? ItmPutBrush : null;
+        const double eps = 1e-6;
+        StrikeWeight = Math.Abs(row.Strike - atmStrike) < eps ? FontWeight.Bold : FontWeight.Normal;
+        CallBackground = row.Strike < atmStrike - eps ? ItmCallBrush : null;
+        PutBackground = row.Strike > atmStrike + eps ? ItmPutBrush : null;
 
         CallIvText = FormatIv(row.CallIv);
         CallDeltaText = row.CallGreeks.Delta.ToString("F4");

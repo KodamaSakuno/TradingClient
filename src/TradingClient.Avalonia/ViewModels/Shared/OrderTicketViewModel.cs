@@ -65,17 +65,30 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
             .DisposeWith(_subscriptions);
         symbol
             .ObserveOn(RxApp.MainThreadScheduler)
-            .Subscribe(s => _symbol = s, ex => logger.Error(ex, "Ticket symbol stream faulted"))
+            .Subscribe(
+                s =>
+                {
+                    _symbol = s;
+                    this.RaisePropertyChanged(nameof(BuyButtonText));
+                    this.RaisePropertyChanged(nameof(SellButtonText));
+                },
+                ex => logger.Error(ex, "Ticket symbol stream faulted"))
             .DisposeWith(_subscriptions);
 
-        var submit = ReactiveCommand.CreateFromTask(SubmitAsync);
-        Submit = submit;
-        submit.ThrownExceptions
-            .Subscribe(ex => logger.Error(ex, "Order submit faulted"))
+        var buySubmit = ReactiveCommand.CreateFromTask(BuyAsync);
+        BuySubmit = buySubmit;
+        buySubmit.ThrownExceptions
+            .Subscribe(ex => logger.Error(ex, "Buy submit faulted"))
             .DisposeWith(_subscriptions);
 
-        SelectBuy = CreateCommand(() => SelectedSide = OrderSide.Buy);
-        SelectSell = CreateCommand(() => SelectedSide = OrderSide.Sell);
+        var sellSubmit = ReactiveCommand.CreateFromTask(SellAsync);
+        SellSubmit = sellSubmit;
+        sellSubmit.ThrownExceptions
+            .Subscribe(ex => logger.Error(ex, "Sell submit faulted"))
+            .DisposeWith(_subscriptions);
+
+        SelectLimit = CreateCommand(() => SelectedType = OrderType.Limit);
+        SelectMarket = CreateCommand(() => SelectedType = OrderType.Market);
         SetBestPrice = CreateCommand(() =>
         {
             if (BestPrice > 0)
@@ -110,8 +123,6 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
         set
         {
             this.RaiseAndSetIfChanged(ref _selectedSide, value);
-            this.RaisePropertyChanged(nameof(BuyButtonBackground));
-            this.RaisePropertyChanged(nameof(SellButtonBackground));
             this.RaisePropertyChanged(nameof(IsBuyEnabled));
             this.RaisePropertyChanged(nameof(IsSellEnabled));
         }
@@ -125,6 +136,10 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
         {
             this.RaiseAndSetIfChanged(ref _selectedType, value);
             this.RaisePropertyChanged(nameof(IsLimit));
+            this.RaisePropertyChanged(nameof(LimitButtonBackground));
+            this.RaisePropertyChanged(nameof(MarketButtonBackground));
+            this.RaisePropertyChanged(nameof(LimitButtonForeground));
+            this.RaisePropertyChanged(nameof(MarketButtonForeground));
         }
     }
 
@@ -214,10 +229,16 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
 
     public string LeverageText => "10"; // 占位：与 FuturesPanel 杠杆保持同步需要额外 plumbing，先写死做演示
 
-    public IBrush BuyButtonBackground => SelectedSide == OrderSide.Buy ? BuyColor : BuyInactiveColor;
-    public IBrush SellButtonBackground => SelectedSide == OrderSide.Sell ? SellColor : SellInactiveColor;
-    public string BuyButtonText => IsFuturesProduct ? "开多" : "买入";
-    public string SellButtonText => IsFuturesProduct ? "开空" : "卖出";
+    public string BuyButtonText => IsFuturesProduct ? "买入开多(看涨)" : "买入";
+    public string SellButtonText => IsFuturesProduct ? "卖出开空(看跌)" : "卖出";
+    public IBrush BuyButtonBackground => BuyColor;
+    public IBrush SellButtonBackground => SellColor;
+
+    private static readonly IBrush SelectedTypeBrush = new SolidColorBrush(Color.Parse("#E6E8EC"));
+    public IBrush LimitButtonBackground => SelectedType == OrderType.Limit ? SelectedTypeBrush : Brushes.Transparent;
+    public IBrush MarketButtonBackground => SelectedType == OrderType.Market ? SelectedTypeBrush : Brushes.Transparent;
+    public IBrush LimitButtonForeground => SelectedType == OrderType.Limit ? Brushes.Black : Brushes.Gray;
+    public IBrush MarketButtonForeground => SelectedType == OrderType.Market ? Brushes.Black : Brushes.Gray;
 
     public bool IsBuyEnabled =>
         RiskState != RiskState.Locked &&
@@ -271,9 +292,10 @@ public sealed class OrderTicketViewModel : ViewModelBase, IDisposable
         private set => this.RaiseAndSetIfChanged(ref _resultBrush, value);
     }
 
-    public ICommand Submit { get; }
-    public ICommand SelectBuy { get; }
-    public ICommand SelectSell { get; }
+    public ICommand BuySubmit { get; }
+    public ICommand SellSubmit { get; }
+    public ICommand SelectLimit { get; }
+    public ICommand SelectMarket { get; }
     public ICommand SetBestPrice { get; }
     public ICommand SetQuantityPercent { get; }
 
