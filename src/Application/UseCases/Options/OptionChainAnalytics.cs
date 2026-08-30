@@ -57,11 +57,12 @@ public sealed class OptionChainAnalytics
     /// </summary>
     public static HedgeAdvice CreateHedgeAdvice(double netDelta, double futuresMultiplier)
     {
-        int lots = (int)Math.Round(Math.Abs(netDelta) / futuresMultiplier, MidpointRounding.AwayFromZero);
+        double rawLots = Math.Abs(netDelta) / futuresMultiplier;
+        int lots = (int)Math.Round(rawLots, MidpointRounding.AwayFromZero);
         var direction = lots == 0
             ? HedgeDirection.None
             : netDelta > 0 ? HedgeDirection.ShortFutures : HedgeDirection.LongFutures;
-        return new HedgeAdvice(direction, lots, netDelta);
+        return new HedgeAdvice(direction, lots, netDelta, rawLots);
     }
 
     private static OptionQuoteRow BuildRow(

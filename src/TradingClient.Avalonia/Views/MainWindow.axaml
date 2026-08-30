@@ -345,7 +345,7 @@
           <!-- T 型报价表 -->
           <StackPanel Grid.Column="0" Spacing="2">
             <Grid ColumnDefinitions="66,54,68,54,56,66,88,66,56,54,68,54,66">
-              <TextBlock Grid.Column="0" Text="C-IV" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
+              <TextBlock Grid.Column="0" Text="C-σ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
               <TextBlock Grid.Column="1" Text="C-Δ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
               <TextBlock Grid.Column="2" Text="C-Γ" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
               <TextBlock Grid.Column="3" Text="C-Vega" FontWeight="Bold" TextAlignment="Right" Margin="4,0" />
@@ -357,7 +357,7 @@
               <TextBlock Grid.Column="9" Text="P-Vega" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
               <TextBlock Grid.Column="10" Text="P-Γ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
               <TextBlock Grid.Column="11" Text="P-Δ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
-              <TextBlock Grid.Column="12" Text="P-IV" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
+              <TextBlock Grid.Column="12" Text="P-σ" FontWeight="Bold" TextAlignment="Left" Margin="4,0" />
             </Grid>
             <ScrollViewer MaxHeight="360">
               <ItemsControl ItemsSource="{Binding OptionsLab.Rows}">
