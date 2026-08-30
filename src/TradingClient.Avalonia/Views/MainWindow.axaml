@@ -232,8 +232,8 @@
       <TextBlock Text="{Binding RiskBannerText}" Foreground="#FF6B6B" FontWeight="Bold" TextWrapping="Wrap" />
     </Border>
 
-    <!-- 底部标签页：持仓 / 当前委托 / 成交记录 -->
-    <TabControl Grid.Row="2" IsVisible="{Binding IsExchangeSelected}">
+    <!-- 底部标签页：持仓 / 当前委托 / 成交记录（仅合约） -->
+    <TabControl Grid.Row="2" IsVisible="{Binding IsFuturesSelected}">
       <TabItem Header="持仓" IsVisible="{Binding IsFuturesSelected}">
         <Grid RowDefinitions="Auto,*" Margin="0,8,0,0">
           <!-- 强平预警：仅期货，有数据时才显示 -->
@@ -277,11 +277,11 @@
         </Grid>
       </TabItem>
 
-      <TabItem Header="当前委托">
+      <TabItem Header="当前委托" IsVisible="False">
         <TextBlock Text="当前委托列表（待接入）" Margin="12" Foreground="Gray"/>
       </TabItem>
 
-      <TabItem Header="成交记录">
+      <TabItem Header="成交记录" IsVisible="False">
         <TextBlock Text="成交记录（待接入）" Margin="12" Foreground="Gray"/>
       </TabItem>
     </TabControl>
